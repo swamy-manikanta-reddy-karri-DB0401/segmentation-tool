@@ -1,0 +1,70 @@
+
+> dev
+> next dev -p 3100
+
+   ▲ Next.js 15.1.6
+   - Local:        http://localhost:3100
+   - Network:      http://172.22.176.1:3100
+   - Environments: .env.local
+
+ ✓ Starting...
+ ✓ Ready in 2.9s
+ ○ Compiling /schema ...
+ ✓ Compiled /schema in 5s (611 modules)
+ GET /schema 200 in 5456ms
+ ○ Compiling /segments/[id] ...
+ ✓ Compiled /segments/[id] in 1056ms (606 modules)
+ GET /segments/new 200 in 2075ms
+ GET /segments/1 200 in 70ms
+ ✓ Compiled /syncs in 437ms (613 modules)
+ GET /syncs 200 in 550ms
+ ✓ Compiled /connections/sources in 305ms (621 modules)
+ GET /connections/sources 200 in 375ms
+ ✓ Compiled /_not-found in 351ms (625 modules)
+ GET /models 404 in 458ms
+ GET /schema 200 in 26ms
+ ✓ Compiled /segments in 417ms (632 modules)
+ GET /segments 200 in 481ms
+ GET /syncs 200 in 18ms
+ GET /connections/sources 200 in 20ms
+ ✓ Compiled /connections/destinations in 388ms (634 modules)
+ GET /connections/destinations 200 in 449ms
+ GET /schema 200 in 17ms
+ GET /segments 200 in 34ms
+ GET /schema 200 in 6664ms
+ GET /segments 200 in 8799ms
+ GET /schema 200 in 10839ms
+ GET /segments 200 in 328ms
+ GET /segments/new 200 in 561ms
+ GET /segments 200 in 33ms
+ GET /segments/1 200 in 119ms
+ GET /schema 200 in 37ms
+ GET /syncs 200 in 58ms
+ ✓ Compiled in 3s (622 modules)
+ GET /segments 200 in 1390ms
+ GET /segments/new 200 in 66ms
+ GET /segments 200 in 18ms
+ GET /syncs 200 in 18ms
+ ✓ Compiled /connections/destinations in 514ms (330 modules)
+ GET /connections/destinations 200 in 662ms
+ ✓ Compiled /connections/sources in 179ms (332 modules)
+ GET /connections/sources 200 in 264ms
+ GET /syncs 200 in 16ms
+ GET /segments 200 in 15ms
+ GET /schema 200 in 32ms
+ GET /segments 200 in 11ms
+ GET /schema 200 in 12ms
+ GET /segments 200 in 12ms
+ ✓ Compiled in 6.2s (639 modules)
+ ✓ Compiled in 259ms (625 modules)
+ ✓ Compiled in 420ms (625 modules)
+ ✓ Compiled in 230ms (299 modules)
+ ✓ Compiled in 447ms (626 modules)
+ GET /schema 200 in 318ms
+ GET /segments/new 200 in 119ms
+ GET /segments/1 200 in 21ms
+ ✓ Compiled /syncs in 243ms (333 modules)
+ GET /syncs 200 in 368ms
+ ✓ Compiled /alerts in 324ms (639 modules)
+ GET /alerts 200 in 396ms
+ GET /connections/sources 200 in 23ms

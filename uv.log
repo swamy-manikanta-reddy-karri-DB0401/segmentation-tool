@@ -1,0 +1,32 @@
+INFO:     Started server process [16824]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8100 (Press CTRL+C to quit)
+INFO:     127.0.0.1:60228 - "GET /api/syncs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52919 - "GET /api/segments HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52921 - "GET /api/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52923 - "GET /api/syncs HTTP/1.1" 200 OK
+[WARN] pyarrow is not installed by default since databricks-sql-connector 4.0.0,any arrow specific api (e.g. fetchmany_arrow) and cloud fetch will be disabled.If you need these features, please run pip install pyarrow or pip install databricks-sql-connector[pyarrow] to install
+INFO:     127.0.0.1:60123 - "PUT /api/models/3/privacy HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55024 - "PUT /api/models/1/privacy HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55026 - "POST /api/syncs HTTP/1.1" 422 Unprocessable Content
+INFO:     127.0.0.1:55028 - "POST /api/syncs HTTP/1.1" 422 Unprocessable Content
+INFO:     127.0.0.1:55030 - "POST /api/segments/preview HTTP/1.1" 422 Unprocessable Content
+INFO:     127.0.0.1:55032 - "POST /api/segments/preview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55034 - "POST /api/segments/preview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55036 - "POST /api/segments/preview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64713 - "POST /api/segments/preview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58614 - "POST /api/syncs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58388 - "GET /api/syncs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58390 - "GET /api/alerts?open_only=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58392 - "PUT /api/syncs/3 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58394 - "POST /api/syncs/3/run HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58396 - "GET /api/syncs/3/runs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58398 - "PUT /api/syncs/3 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58400 - "PUT /api/syncs/3 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58402 - "POST /api/syncs/3/run HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62847 - "GET /api/syncs/3/runs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62849 - "GET /api/syncs/3/runs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62851 - "POST /api/runs/5/cancel HTTP/1.1" 409 Conflict
+INFO:     127.0.0.1:62853 - "DELETE /api/syncs/3 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58851 - "GET /api/alerts/count HTTP/1.1" 200 OK

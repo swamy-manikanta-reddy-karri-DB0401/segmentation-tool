@@ -1,0 +1,3 @@
+npm warn deprecated next@15.1.6: This version has a security vulnerability. Please upgrade to a patched version. See https://nextjs.org/blog/CVE-2025-66478 for more details.
+
+added 34 packages in 3m
