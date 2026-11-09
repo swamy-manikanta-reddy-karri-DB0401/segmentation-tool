@@ -27,6 +27,8 @@ SETTINGS = {
     "PGSCHEMA": "cdp",
     # Databricks users or groups that are always Platform Admins (comma separated)
     "CDP_PLATFORM_ADMINS": os.environ.get("CDP_PLATFORM_ADMINS", "manikanta.karri@sureshgarapatidatabeat.onmicrosoft.com"),
+    # Links in alert notifications point here
+    "CDP_APP_URL": os.environ.get("CDP_APP_URL", "https://mediamint-cdp-7405615965667597.17.azure.databricksapps.com"),
     # Postgres roles that may read/write the app's tables (DBAs, data migration)
     "PG_GRANT_TO": os.environ.get("CDP_PG_GRANT_TO", "manikanta.karri@sureshgarapatidatabeat.onmicrosoft.com"),
 }

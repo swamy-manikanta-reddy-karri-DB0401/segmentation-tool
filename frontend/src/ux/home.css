@@ -1,0 +1,109 @@
+/* =====================================================================
+   Home (attention center), Profiles, Sources — fork A
+   ===================================================================== */
+
+/* ---- Home ---- */
+.hm { display: flex; flex-direction: column; gap: 20px; }
+.hm-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+.hm-head h1 { font-size: 28px; letter-spacing: -0.03em; }
+.hm-head p { margin: 4px 0 0; font-size: 13.5px; }
+.hm-date { font-size: 11.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--brand); margin-bottom: 6px; }
+.hm-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.hm-kbd { margin-left: 6px; font: 600 10px var(--font); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border-strong); color: var(--text-3); background: var(--surface-2); }
+
+/* compact pipeline strip: same story as before, a fifth of the height */
+.hm-pipe {
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; padding: 8px; border-radius: 16px;
+  background: radial-gradient(120% 140% at 0% 0%, #0d4f4d 0%, #102624 45%, #131a19 100%); box-shadow: var(--shadow);
+}
+.hm-stage { position: relative; display: flex; align-items: center; gap: 11px; padding: 12px 14px; border-radius: 11px; color: #fff; min-width: 0;
+  background: rgba(255, 255, 255, .05); border: 1px solid rgba(255, 255, 255, .08); transition: background .15s, border-color .15s; }
+.hm-stage:hover { background: rgba(255, 255, 255, .1); border-color: rgba(107, 198, 181, .5); color: #fff; }
+.hm-stage:not(:last-child)::after { content: ""; position: absolute; right: -6px; top: 50%; width: 6px; height: 2px; background: rgba(107, 198, 181, .55); }
+.hm-stage.attention { border-color: rgba(242, 181, 82, .55); }
+.hm-stage-icon { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; flex: none; background: linear-gradient(135deg, var(--teal, #00b5b0), #058ea8); }
+.hm-stage-icon svg { width: 17px; height: 17px; }
+.hm-stage-text { display: flex; flex-direction: column; min-width: 0; }
+.hm-stage-step { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; letter-spacing: .02em; color: rgba(255, 255, 255, .62); white-space: nowrap; }
+.hm-stage-val { font-size: 12px; color: rgba(255, 255, 255, .7); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hm-stage-val strong { font-size: 18px; color: #fff; letter-spacing: -0.02em; margin-right: 2px; }
+.hm-dot { width: 7px; height: 7px; border-radius: 50%; background: rgba(255, 255, 255, .3); }
+.hm-dot.ready { background: #4fd19a; box-shadow: 0 0 0 3px rgba(79, 209, 154, .18); }
+.hm-dot.attention { background: #f2b552; box-shadow: 0 0 0 3px rgba(242, 181, 82, .2); }
+.hm-skel { min-height: 58px; animation: pulse 1.4s ease-in-out infinite; }
+
+.hm-grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+.hm-col { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.hm-ellipsis { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* attention list */
+.hm-att { list-style: none; margin: 0; padding: 4px 0; }
+.hm-att-item { display: flex; align-items: center; gap: 14px; padding: 13px 20px; border-top: 1px solid var(--border); }
+.hm-att-item:first-child { border-top: 0; }
+.hm-att-bar { width: 4px; align-self: stretch; border-radius: 4px; background: var(--text-3); flex: none; }
+.hm-att-item.red .hm-att-bar { background: var(--red); }
+.hm-att-item.amber .hm-att-bar { background: var(--amber); }
+.hm-att-item.blue .hm-att-bar { background: var(--blue); }
+.hm-att-title { font-weight: 600; font-size: 14px; }
+.hm-att-detail { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.hm-att-item .btn { flex: none; }
+.hm-att-more { padding: 10px 20px; border-top: 1px solid var(--border); font-size: 13px; }
+.hm-clear { display: flex; align-items: center; gap: 14px; padding: 22px 20px; }
+.hm-clear-icon { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; flex: none; font-weight: 800; background: var(--green-soft); color: var(--green); }
+.hm-quiet { display: flex; flex-direction: column; gap: 6px; padding: 22px 20px; }
+
+/* runs */
+.hm-runs, .hm-aud, .hm-dests { list-style: none; margin: 0; padding: 4px 0; }
+.hm-run { display: flex; align-items: center; gap: 12px; padding: 11px 20px; border-top: 1px solid var(--border); color: inherit; }
+.hm-runs li:first-child .hm-run { border-top: 0; }
+.hm-run:hover { background: var(--surface-2); color: inherit; }
+.hm-run-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.hm-run-delta { display: flex; gap: 10px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.hm-run-delta b { font-weight: 600; color: var(--text-2); }
+.hm-run-delta b.add { color: var(--green); }
+.hm-run-delta b.rem { color: var(--red); }
+.hm-run-when { width: 64px; text-align: right; flex: none; }
+
+/* setup checklist */
+.hm-setup ol { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+.hm-setup li { display: flex; align-items: center; gap: 10px; font-size: 13.5px; }
+.hm-setup li.done { color: var(--text-3); }
+.hm-check { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; flex: none; font-size: 11px; font-weight: 800; border: 1.5px solid var(--border-strong); }
+.hm-setup li.done .hm-check { background: var(--green); border-color: var(--green); color: #fff; }
+.hm-setup .meter { margin-top: 10px; }
+
+/* audiences */
+.hm-aud-row { display: flex; align-items: center; gap: 12px; padding: 10px 20px; border-top: 1px solid var(--border); color: inherit; }
+.hm-aud li:first-child .hm-aud-row { border-top: 0; }
+.hm-aud-row:hover { background: var(--surface-2); color: inherit; }
+.hm-aud-row strong { font-size: 13.5px; font-weight: 600; }
+.hm-aud-icon { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; flex: none; font-weight: 700; background: var(--brand-soft); color: var(--brand); }
+.hm-aud-size { display: flex; flex-direction: column; align-items: flex-end; flex: none; }
+.hm-aud-size strong { font-size: 15px; font-variant-numeric: tabular-nums; }
+
+.hm-dests li { display: flex; align-items: center; gap: 10px; padding: 10px 20px; border-top: 1px solid var(--border); font-size: 13.5px; min-width: 0; }
+.hm-dests li:first-child { border-top: 0; }
+
+/* ---- Profiles ---- */
+.profile-search { display: flex; flex-direction: column; gap: 6px; }
+.profile-search .dm-search { max-width: none; flex: none; }
+.pf-hint { padding-left: 2px; }
+.pf-recent { padding: 10px 14px 6px; border-bottom: 1px solid var(--border); }
+.pf-chip { border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2); border-radius: 999px; padding: 3px 10px; font: 500 12px var(--font); cursor: pointer; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-chip:hover, .pf-chip.on { border-color: var(--brand-fill); color: var(--brand); }
+.pf-group-label { font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); margin-bottom: 8px; }
+.profile-item.cursor:not(.on) { background: var(--surface-2); }
+.pf-cap { padding: 8px 12px 10px; }
+.pf-n { margin-left: 4px; font-size: 11px; font-weight: 700; padding: 0 6px; border-radius: 999px; background: var(--surface-3); color: var(--text-2); letter-spacing: 0; text-transform: none; }
+.pf-sec-head { gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.pf-sec-head .dm-search { max-width: 260px; }
+.pf-group + .pf-group { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--border); }
+.pf-details summary { cursor: pointer; margin-top: 12px; }
+.pf-more { margin-top: 6px; }
+
+@media (max-width: 1000px) {
+  .hm-pipe { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hm-stage::after { display: none; }
+  .hm-grid { grid-template-columns: 1fr; }
+  .hm-run-delta { display: none; }
+}

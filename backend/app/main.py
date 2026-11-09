@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from collections import deque
@@ -12,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import access, audiences, catalog, config, connection, db, destinations, insights, scheduler, sync_engine
+from . import access, alerts, audiences, catalog, config, connection, db, destinations, insights, scheduler, sync_engine
 from .compiler import CompileError, Compiler, source, trait_type
 from .databricks import DatabricksError, client, reset_client
 from .scheduler import ScheduleError
@@ -30,6 +31,8 @@ async def lifespan(_: FastAPI):
     db.conn()
     connection.seed()
     access.seed()
+    alerts.migrate_legacy()
+    asyncio.get_running_loop().run_in_executor(None, access.check_group_lookup)  # self-test, result in settings
     scheduler.recover_interrupted_runs()
     task = asyncio.create_task(scheduler.loop())
     yield
@@ -799,7 +802,10 @@ def delete_template(template_id: int):
 SYNC_LIST_SQL = """
 SELECT s.*, a.name AS audience_name, a.parent_id AS parent_id, d.name AS destination_name, d.type AS destination_type,
   m.brand_id AS brand_id,
-  (SELECT status FROM sync_runs r WHERE r.sync_id = s.id ORDER BY r.id DESC LIMIT 1) AS last_status
+  (SELECT status FROM sync_runs r WHERE r.sync_id = s.id ORDER BY r.id DESC LIMIT 1) AS last_status,
+  (SELECT COUNT(*) FROM alerts al WHERE al.sync_id = s.id AND al.status != 'healthy') AS alert_count,
+  (SELECT MAX(CASE WHEN al.status = 'critical' THEN 2 WHEN al.status = 'warning' THEN 1 ELSE 0 END)
+     FROM alerts al WHERE al.sync_id = s.id) AS alert_level
 FROM syncs s JOIN audiences a ON a.id = s.audience_id JOIN destinations d ON d.id = s.destination_id
 LEFT JOIN models m ON m.id = a.parent_id
 """
@@ -986,6 +992,174 @@ def dashboard():
     }
 
 
+# ---- alerts ---------------------------------------------------------------------------------
+
+ALERT_SQL = """
+SELECT al.*, s.name AS sync_name, s.destination_id, d.name AS destination_name, d.type AS destination_type,
+       a.name AS audience_name, m.brand_id AS brand_id
+FROM alerts al JOIN syncs s ON s.id = al.sync_id JOIN destinations d ON d.id = s.destination_id
+JOIN audiences a ON a.id = s.audience_id LEFT JOIN models m ON m.id = a.parent_id
+"""
+
+
+def _alert_out(r: dict) -> dict:
+    u = access.current()
+    r["label"] = alerts.TRIGGERS[r["trigger"]]["label"]
+    r["muted"] = alerts._muted(r)
+    r["can_mute"] = u.can("syncs.run", r["brand_id"], r["destination_id"]) or u.can("syncs.approve", r["brand_id"])
+    return r
+
+
+@app.get("/api/alerts/catalog")
+def alert_catalog():
+    return {"triggers": [{"key": k, "label": v["label"], "description": v["description"], "defaults": v["defaults"],
+                          "threshold": alerts.THRESHOLDS.get(k)} for k, v in alerts.TRIGGERS.items()],
+            "channels": [{"key": k, **v} for k, v in alerts.CHANNELS.items()],
+            "email_configured": bool((db.get_setting("smtp") or {}).get("host"))}
+
+
+@app.get("/api/alerts")
+def list_alerts(status: str = "active", sync_id: int | None = None):
+    where, args = [], []
+    if status == "active":
+        where.append("al.status != 'healthy'")
+    if sync_id:
+        where.append("al.sync_id = ?")
+        args.append(sync_id)
+    rows = db.query(ALERT_SQL + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY al.updated_at DESC", tuple(args))
+    u = access.current()
+    return [_alert_out(r) for r in rows if u.sees(r["brand_id"])]
+
+
+@app.get("/api/alert-events")
+def list_alert_events(sync_id: int | None = None, limit: int = 300):
+    sql = ("SELECT e.*, s.name AS sync_name, s.destination_id, d.name AS destination_name, m.brand_id AS brand_id "
+           "FROM alert_events e JOIN syncs s ON s.id = e.sync_id JOIN destinations d ON d.id = s.destination_id "
+           "JOIN audiences a ON a.id = s.audience_id LEFT JOIN models m ON m.id = a.parent_id")
+    rows = (db.query(sql + " WHERE e.sync_id = ? ORDER BY e.id DESC LIMIT ?", (sync_id, min(limit, 1000))) if sync_id
+            else db.query(sql + " ORDER BY e.id DESC LIMIT ?", (min(limit, 1000),)))
+    u = access.current()
+    return [{**r, "label": alerts.TRIGGERS[r["trigger"]]["label"]} for r in rows if u.sees(r["brand_id"])]
+
+
+def _require_alert_control(sync_id: int) -> None:
+    s = _get("syncs", sync_id)
+    brand = access.brand_of_sync(sync_id)
+    u = access.current()
+    if not (u.can("syncs.run", brand, s["destination_id"]) or u.can("syncs.approve", brand)):
+        raise HTTPException(403, "Only Brand Marketing Admins and Sync Operators can mute alerts")
+
+
+@app.post("/api/alerts/mute")
+def mute_alert(body: dict = Body(...)):
+    sid = int(body["sync_id"])
+    _require_alert_control(sid)
+    out = alerts.mute(sid, body["trigger"], body.get("minutes"))
+    access.audit("mute", "alert", sid, access.brand_of_sync(sid), trigger=body["trigger"], minutes=body.get("minutes"))
+    return out
+
+
+@app.post("/api/alerts/unmute")
+def unmute_alert(body: dict = Body(...)):
+    sid = int(body["sync_id"])
+    _require_alert_control(sid)
+    alerts.unmute(sid, body["trigger"])
+    access.audit("unmute", "alert", sid, access.brand_of_sync(sid), trigger=body["trigger"])
+    return {"ok": True}
+
+
+def _recipient_perm(brand_id: int | None) -> None:
+    access.require("settings.manage" if brand_id is None else "destinations.manage", brand_id)
+
+
+@app.get("/api/alert-recipients")
+def list_recipients():
+    u = access.current()
+    return [alerts.mask(r) for r in db.query("SELECT * FROM alert_recipients ORDER BY name") if u.sees(r["brand_id"])]
+
+
+@app.post("/api/alert-recipients")
+def create_recipient(body: dict = Body(...)):
+    brand_id = _brand(body.get("brand_id"))
+    _recipient_perm(brand_id)
+    values = alerts.validate_recipient(body)
+    rid = db.insert("alert_recipients", {**values, "brand_id": brand_id, "created_by": access.current().email, "created_at": db.now()})
+    access.audit("create", "alert_recipient", rid, brand_id, name=values["name"], channel=values["channel"])
+    return alerts.mask(_get("alert_recipients", rid))
+
+
+@app.put("/api/alert-recipients/{rid}")
+def update_recipient(rid: int, body: dict = Body(...)):
+    current = _get("alert_recipients", rid)
+    _recipient_perm(current["brand_id"])
+    db.update("alert_recipients", rid, alerts.validate_recipient(body, current))
+    return alerts.mask(_get("alert_recipients", rid))
+
+
+@app.delete("/api/alert-recipients/{rid}")
+def delete_recipient(rid: int):
+    current = _get("alert_recipients", rid)
+    _recipient_perm(current["brand_id"])
+    db.delete("alert_recipients", rid)
+    access.audit("delete", "alert_recipient", rid, current["brand_id"], name=current["name"])
+    return {"ok": True}
+
+
+@app.post("/api/alert-recipients/test")
+def test_recipient(body: dict = Body(...)):
+    existing = _get("alert_recipients", int(body["id"])) if body.get("id") else None
+    _recipient_perm((existing or {}).get("brand_id") if existing else _brand(body.get("brand_id")))
+    values = alerts.validate_recipient(body, existing)
+    try:
+        return {"ok": True, "message": alerts.test_recipient({**values, "id": body.get("id") or 0})}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": str(e)}
+
+
+@app.get("/api/alert-policies/{scope}/{scope_id}")
+def get_alert_policy(scope: str, scope_id: int):
+    if scope not in ("destination", "sync"):
+        raise HTTPException(404, "Unknown scope")
+    access.require_view(access.brand_of_destination(scope_id) if scope == "destination" else access.brand_of_sync(scope_id))
+    return alerts.effective(scope, scope_id)
+
+
+@app.put("/api/alert-policies/{scope}/{scope_id}")
+def put_alert_policy(scope: str, scope_id: int, body: dict = Body(...)):
+    if scope == "destination":
+        access.require("destinations.manage", access.brand_of_destination(_get("destinations", scope_id)["id"]))
+    elif scope == "sync":
+        brand = access.brand_of_sync(_get("syncs", scope_id)["id"])
+        u = access.current()
+        if not (u.can("syncs.edit", brand) or u.can("syncs.approve", brand)):
+            raise HTTPException(403, "Your role can't change alerting for this sync")
+    else:
+        raise HTTPException(404, "Unknown scope")
+    out = alerts.save_policy(scope, scope_id, body.get("triggers") or {}, body.get("recipient_ids"))
+    access.audit("update", f"{scope}_alerting", scope_id, None)
+    return out
+
+
+@app.get("/api/alerts/email-settings")
+def get_email_settings():
+    s = db.get_setting("smtp") or {}
+    return {**{k: s.get(k, "") for k in ("host", "port", "username", "sender")}, "starttls": s.get("starttls", True),
+            "password": MASK if s.get("password") else ""}
+
+
+@app.put("/api/alerts/email-settings")
+def put_email_settings(body: dict = Body(...)):
+    access.require("settings.manage")
+    current = db.get_setting("smtp") or {}
+    s = {k: (body.get(k) or "").strip() if isinstance(body.get(k), str) else body.get(k) for k in ("host", "port", "username", "sender", "password", "starttls")}
+    if s.get("password") in (None, "", MASK):
+        s["password"] = current.get("password", "")
+    if s.get("host") and not s.get("sender") and "@" not in (s.get("username") or ""):
+        raise ValueError("Set the From address")
+    db.set_setting("smtp", s)
+    return get_email_settings()
+
+
 # ---- access control: me, brands, roles --------------------------------------------------------
 
 def _brands_out() -> list[dict]:
@@ -1005,7 +1179,8 @@ def me():
                        "destination_ids": b.destination_ids} for b in u.bindings],
             "platform": {p: u.can(p) for p in sorted(access.PLATFORM_PERMS)},
             "brands": [{"id": b["id"], "name": b["name"], "can": {p: u.can(p, b["id"]) for p in perms}} for b in brands],
-            "in_databricks_app": access.IN_DATABRICKS_APP}
+            "in_databricks_app": access.IN_DATABRICKS_APP,
+            "group_lookup": db.get_setting("group_lookup") if u.platform_admin else None}
 
 
 @app.get("/api/roles")
@@ -1134,7 +1309,8 @@ def inbox_clear():
 
 # ---- serve the built frontend (production mode) -----------------------------------------
 
-DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+# CDP_DIST lets a preview server serve another frontend build (e.g. while reviewing UI changes)
+DIST = Path(os.environ.get("CDP_DIST") or Path(__file__).resolve().parents[2] / "frontend" / "dist")
 if DIST.exists():
     app.mount("/assets", StaticFiles(directory=DIST / "assets"), name="assets")
 

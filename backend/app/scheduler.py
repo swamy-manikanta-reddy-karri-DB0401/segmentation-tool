@@ -122,8 +122,19 @@ def due_syncs(now: datetime | None = None) -> list[dict]:
             and destination_configured(s["destination_id"])]
 
 
+ALERT_CHECK_SECONDS = 300
+
+
 async def loop() -> None:
+    from . import alerts
+    last_alert_check = 0.0
     while True:
+        if asyncio.get_running_loop().time() - last_alert_check >= ALERT_CHECK_SECONDS:
+            last_alert_check = asyncio.get_running_loop().time()
+            try:  # time-based triggers: nothing delivered for N days, runs past their limit
+                await asyncio.to_thread(alerts.evaluate_periodic)
+            except Exception:
+                log.exception("Alert check failed")
         try:
             for s in due_syncs():
                 log.info("Starting scheduled sync %s", s["id"])

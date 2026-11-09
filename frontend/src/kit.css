@@ -1,0 +1,73 @@
+/* =====================================================================
+   Shared kit: toolbar, chips, sortable headers, skeletons, toasts,
+   confirm dialog, quick find (⌘K)
+   ===================================================================== */
+.kit-toolbar { margin-bottom: 14px; }
+.kit-chips button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.kit-chip-n { font-size: 11px; font-weight: 700; padding: 0 6px; border-radius: 999px; background: var(--surface-2); color: var(--text-3); }
+.kit-chips button.on .kit-chip-n { background: var(--brand-soft); color: var(--brand); }
+.kit-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); }
+.kit-dot.green { background: var(--green); } .kit-dot.amber { background: var(--amber); } .kit-dot.red { background: var(--red); }
+.kit-dot.blue { background: var(--blue); } .kit-dot.violet { background: var(--violet); } .kit-dot.gray { background: var(--text-3); }
+
+.kit-sort button { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; }
+.kit-sort button span { opacity: .35; font-size: 10px; }
+.kit-sort.on button { color: var(--text); }
+.kit-sort.on button span { opacity: 1; color: var(--brand); }
+.kit-sort button:focus-visible { outline: 2px solid var(--brand-fill); outline-offset: 2px; border-radius: 3px; }
+
+.kit-skel { display: flex; flex-direction: column; gap: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
+.kit-skel-row { display: flex; gap: 24px; padding: 16px 18px; border-top: 1px solid var(--border); }
+.kit-skel-row:first-child { border-top: 0; }
+.kit-skel-row span { height: 12px; border-radius: 6px; background: linear-gradient(90deg, var(--surface-3) 0%, var(--surface-2) 50%, var(--surface-3) 100%); background-size: 200% 100%; animation: dm-shimmer 1.4s linear infinite; }
+
+/* toasts */
+.kit-toasts { position: fixed; right: 20px; bottom: 20px; z-index: 120; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; pointer-events: none; }
+.kit-toast { pointer-events: auto; display: flex; align-items: center; gap: 10px; min-width: 260px; max-width: 440px; padding: 11px 12px 11px 14px; border-radius: 12px;
+  background: var(--ink); color: #fff; box-shadow: var(--shadow-lg); font-size: 13.5px; animation: rise .18s ease-out; }
+.kit-toast-icon { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; flex: none; font-size: 12px; font-weight: 800; background: var(--green); }
+.kit-toast.error .kit-toast-icon { background: var(--red); }
+.kit-toast.info .kit-toast-icon { background: var(--blue); }
+.kit-toast > span:nth-child(2) { flex: 1; }
+.kit-toast button { border: 0; background: none; color: rgba(255, 255, 255, .6); font-size: 18px; cursor: pointer; line-height: 1; }
+:root[data-theme="dark"] .kit-toast { background: #2a2a2e; border: 1px solid #3a3a3f; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .kit-toast { background: #2a2a2e; border: 1px solid #3a3a3f; } }
+
+/* confirm */
+.kit-confirm { max-width: 460px; margin-top: 12vh; }
+.kit-confirm-body { display: flex; gap: 14px; padding: 22px 24px; }
+.kit-confirm-body h2 { font-size: 16px; }
+.kit-confirm-icon { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; flex: none; font-weight: 800; background: var(--brand-soft); color: var(--brand); }
+.kit-confirm-icon.danger { background: var(--red-soft); color: var(--red); }
+.btn.danger-fill { background: var(--red); border-color: var(--red); color: #fff; }
+.btn.danger-fill:hover { filter: brightness(.95); }
+
+/* sidebar quick find button */
+.side-find { display: flex; align-items: center; gap: 8px; margin: 0 12px 10px; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--side-border);
+  background: var(--side-bg-2); color: var(--side-text-dim); font: 500 12.5px var(--font); cursor: pointer; text-align: left; }
+.side-find:hover { color: var(--side-text); border-color: color-mix(in srgb, var(--mint) 40%, transparent); }
+.side-find svg { width: 14px; height: 14px; flex: none; }
+.side-find span { flex: 1; }
+.side-find kbd, .qf kbd { font: 600 10px var(--font); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--side-border); color: var(--side-text-dim); }
+
+/* quick find */
+.qf-overlay { align-items: flex-start; padding-top: 12vh; }
+.qf { width: min(640px, 100%); background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-lg); overflow: hidden; animation: rise .14s ease-out; }
+.qf-input { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); color: var(--text-3); }
+.qf-input svg { width: 18px; height: 18px; flex: none; }
+.qf-input input { flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font: 16px var(--font); }
+.qf kbd { border-color: var(--border-strong); color: var(--text-3); background: var(--surface-2); }
+.qf-list { max-height: min(420px, 55vh); overflow-y: auto; padding: 6px; }
+.qf-hit { display: grid; grid-template-columns: 104px minmax(0, 1fr) auto 18px; align-items: center; gap: 12px; width: 100%; padding: 9px 10px; border: 0; border-radius: 9px; background: none; text-align: left; cursor: pointer; font: inherit; color: var(--text); }
+.qf-hit.on { background: var(--surface-2); }
+.qf-kind { font-size: 10.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-3); }
+.qf-kind.k-audience { color: var(--brand); } .qf-kind.k-sync { color: var(--violet); } .qf-kind.k-destination { color: var(--blue); } .qf-kind.k-action { color: var(--green); }
+.qf-label { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qf-hint { font-size: 12px; color: var(--text-3); white-space: nowrap; }
+.qf-enter { color: var(--text-3); opacity: 0; }
+.qf-hit.on .qf-enter { opacity: 1; }
+.qf-foot { display: flex; gap: 16px; padding: 9px 16px; border-top: 1px solid var(--border); background: var(--surface-2); font-size: 11.5px; color: var(--text-3); }
+.qf-foot span { display: inline-flex; gap: 4px; align-items: center; }
+
+/* consistent page widths */
+.page.wide { max-width: 1320px; }

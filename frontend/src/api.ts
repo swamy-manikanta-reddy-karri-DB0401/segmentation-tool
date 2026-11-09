@@ -292,6 +292,9 @@ export interface Sync {
   approved_at?: string | null
   review_note?: string
   can?: { edit: boolean; approve: boolean; run: boolean }
+  /** active (non-healthy) alerts on this sync, and the worst level: 0 none · 1 warning · 2 critical */
+  alert_count?: number
+  alert_level?: number | null
 }
 
 export interface SyncRun {

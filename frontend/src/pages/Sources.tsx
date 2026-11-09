@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom'
 import { api, fmt } from '../api'
 import type { Dataset, SourceConnection, SourcesResponse, SourceStatus, SourceTable, Warehouse } from '../api'
 import { Empty, ErrorBox, Field, Modal, PageHead, Spinner, Toggle, useAsync } from '../components/ui'
+import { askConfirm, matches, NoResults, Pager, SearchBox, SkeletonRows, toast, usePaged } from '../components/kit'
+import '../ux/home.css'
 import { useMe } from '../components/me'
 
 const MASK = '••••••••'
@@ -117,7 +119,10 @@ function ConnectionModal({ existing, onClose, onSaved }: { existing?: SourceStat
   )
 }
 
-function DatasetCard({ d, connectionId, onOpen }: { d: Dataset; connectionId: number; onOpen: (t: SourceTable, cid: number) => void }) {
+function DatasetCard({ d, connectionId, onOpen, canOpen }: { d: Dataset; connectionId: number; onOpen: (t: SourceTable, cid: number) => void; canOpen: boolean }) {
+  const [q, setQ] = useState('')
+  const rows = d.tables.filter((t) => matches(q, t.name, t.comment, ...t.used_by.map((u) => u.model_name)))
+  const paged = usePaged(rows, 10, q)
   return (
     <div className="dataset">
       <div className="row" style={{ gap: 12, padding: '14px 18px' }}>
@@ -128,11 +133,12 @@ function DatasetCard({ d, connectionId, onOpen }: { d: Dataset; connectionId: nu
         </div>
         <span className="badge teal">Unity Catalog</span>
       </div>
+      {d.tables.length > 10 && <div style={{ padding: '0 18px 12px' }}><SearchBox value={q} onChange={setQ} placeholder={`Search ${d.tables.length} tables…`} /></div>}
       <table className="table">
         <thead><tr><th>Table</th><th>Rows</th><th>Columns</th><th>Size</th><th>Updated</th><th>Used by</th></tr></thead>
         <tbody>
-          {d.tables.map((t) => (
-            <tr key={t.full_name} className="clickable" onClick={() => onOpen(t, connectionId)}>
+          {paged.slice.map((t) => (
+            <tr key={t.full_name} className={canOpen ? 'clickable' : ''} onClick={() => canOpen && onOpen(t, connectionId)} title={canOpen ? 'Preview the first rows' : undefined}>
               <td><strong>{t.name}</strong>{t.comment && <div className="small faint">{t.comment}</div>}</td>
               <td>{fmt.num(t.rows)}</td>
               <td>{fmt.num(t.columns)}</td>
@@ -147,8 +153,10 @@ function DatasetCard({ d, connectionId, onOpen }: { d: Dataset; connectionId: nu
               </td>
             </tr>
           ))}
+          {!rows.length && <tr><td colSpan={6}><NoResults what="tables" onClear={() => setQ('')} /></td></tr>}
         </tbody>
       </table>
+      {d.tables.length > 10 && <div style={{ padding: '0 18px 12px' }}><Pager page={paged.page} pages={paged.pages} total={rows.length} pageSize={10} onPage={paged.setPage} noun="table" /></div>}
     </div>
   )
 }
@@ -161,8 +169,8 @@ export default function Sources() {
   const conns = sources.data?.connections ?? []
 
   const remove = async (c: SourceStatus) => {
-    if (!confirm(`Remove the connection “${c.name}”? Nothing in Databricks is changed.`)) return
-    try { await api.del(`/connections/${c.id}`); sources.reload() } catch (e) { alert((e as Error).message) }
+    if (!await askConfirm({ title: `Remove “${c.name}”?`, body: 'The connection is removed from this app only — nothing in Databricks is changed.', confirmLabel: 'Remove connection', danger: true })) return
+    try { await api.del(`/connections/${c.id}`); sources.reload(); toast(`${c.name} removed`) } catch (e) { toast((e as Error).message, 'error') }
   }
 
   return (
@@ -173,7 +181,7 @@ export default function Sources() {
           : <span className="badge" title="Only Platform Admins can manage Databricks sources">View only</span>} />
       <ErrorBox error={sources.error} />
 
-      {sources.loading ? <Spinner label="Checking connections and reading Unity Catalog…" /> : !conns.length ? (
+      {sources.loading && !sources.data ? <div className="card card-pad"><div className="small muted" style={{ marginBottom: 12 }}>Checking connections and reading Unity Catalog…</div><SkeletonRows rows={4} cols={5} /></div> : !conns.length ? (
         <div className="card">
           <Empty title="No Databricks connection yet" action={admin ? <button className="btn primary" onClick={() => setEditing({})}>Add connection</button> : undefined}>
             Connect a workspace with a service principal to start modeling your data.
@@ -208,11 +216,11 @@ export default function Sources() {
               {c.error && <ErrorBox error={c.error} />}
             </div>
           </div>
-          {c.datasets.map((d) => <DatasetCard key={`${d.catalog}.${d.schema}`} d={d} connectionId={c.id} onOpen={(table, cid) => admin && setOpen({ table, cid })} />)}
+          {c.datasets.map((d) => <DatasetCard key={`${d.catalog}.${d.schema}`} d={d} connectionId={c.id} canOpen={admin} onOpen={(table, cid) => setOpen({ table, cid })} />)}
         </div>
       ))}
       {open && <PreviewModal table={open.table} connectionId={open.cid} onClose={() => setOpen(null)} />}
-      {editing && <ConnectionModal existing={editing.existing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); sources.reload() }} />}
+      {editing && <ConnectionModal existing={editing.existing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); sources.reload(); toast(editing.existing ? 'Connection updated' : 'Connection added') }} />}
     </div>
   )
 }

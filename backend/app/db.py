@@ -141,6 +141,54 @@ CREATE TABLE IF NOT EXISTS role_bindings (
     created_by TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS alert_recipients (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    config TEXT NOT NULL DEFAULT '{}',
+    severity TEXT NOT NULL DEFAULT 'all',
+    destination_ids TEXT NOT NULL DEFAULT '[]',
+    brand_id INTEGER REFERENCES brands(id) ON DELETE CASCADE,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS alert_policies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope TEXT NOT NULL CHECK (scope IN ('destination', 'sync')),
+    scope_id INTEGER NOT NULL,
+    triggers TEXT NOT NULL DEFAULT '{}',
+    recipient_ids TEXT,
+    updated_at TEXT NOT NULL,
+    UNIQUE (scope, scope_id)
+);
+CREATE TABLE IF NOT EXISTS alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sync_id INTEGER NOT NULL REFERENCES syncs(id) ON DELETE CASCADE,
+    trigger TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'healthy',
+    message TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    opened_at TEXT,
+    updated_at TEXT NOT NULL,
+    resolved_at TEXT,
+    muted_until TEXT,
+    last_run_id INTEGER,
+    UNIQUE (sync_id, trigger)
+);
+CREATE TABLE IF NOT EXISTS alert_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_id INTEGER REFERENCES alerts(id) ON DELETE CASCADE,
+    sync_id INTEGER NOT NULL REFERENCES syncs(id) ON DELETE CASCADE,
+    trigger TEXT NOT NULL,
+    old_status TEXT NOT NULL,
+    new_status TEXT NOT NULL,
+    message TEXT NOT NULL DEFAULT '',
+    at TEXT NOT NULL,
+    muted INTEGER NOT NULL DEFAULT 0,
+    deliveries TEXT NOT NULL DEFAULT '[]',
+    run_id INTEGER
+);
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     at TEXT NOT NULL,
@@ -172,7 +220,7 @@ ADDED_COLUMNS = {
 }
 
 JSON_COLUMNS = {"columns", "definition", "config", "details", "value", "schedule", "join_keys",
-                "merge_columns", "column_settings", "splits", "destination_ids"}
+                "merge_columns", "column_settings", "splits", "destination_ids", "triggers", "recipient_ids", "deliveries"}
 
 
 def now() -> str:

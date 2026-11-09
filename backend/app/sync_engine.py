@@ -21,13 +21,17 @@ import threading
 import traceback
 from typing import Iterator
 
+import logging
+
 import httpx
 
-from . import config, connection, db, destinations, mapping
+from . import alerts, config, connection, db, destinations, mapping
 from .audiences import _load_audience, as_of, load_schema, null_matches_negation
 from .catalog import IDENT_RE, quote_column, quote_ident
 from .compiler import CompileError, Compiler, check_privacy, join_keys, source
 from .databricks import client
+
+log = logging.getLogger(__name__)
 
 TARGET_RE = re.compile(r"^[A-Za-z0-9_\-. ]{1,128}$")
 CUSTOMER_PREFIX = "customer."
@@ -274,9 +278,9 @@ def _run_guarded(sync_id: int, run_id: int, full_resync: bool) -> None:
         with _running_lock:
             _running.discard(sync_id)
         try:
-            alert(sync_id, run_id)
+            alerts.after_run(sync_id, run_id)
         except Exception:  # noqa: BLE001 — alerts must never break a run
-            pass
+            log.exception("Alert evaluation failed for sync %s run %s", sync_id, run_id)
 
 
 def execute(sync_id: int, run_id: int, full_resync: bool = False) -> None:
@@ -422,23 +426,6 @@ def write_audience_snapshot(audience: dict, schema: dict) -> dict:
     dbx.execute(f"CREATE OR REPLACE TABLE {members} AS SELECT * FROM {new}")
     dbx.execute(f"DROP TABLE IF EXISTS {new}")
     return {"table": f"{connection.state_schema()}.audience_membership"}
-
-
-def alert(sync_id: int, run_id: int) -> None:
-    """Post a Slack-compatible message when a run fails or rejects rows (if configured)."""
-    sync = db.one("SELECT name, config FROM syncs WHERE id = ?", (sync_id,))
-    run = db.one("SELECT status, failed, error FROM sync_runs WHERE id = ?", (run_id,))
-    alerts = (sync["config"] or {}).get("alerts") or {}
-    url = alerts.get("webhook_url")
-    if not url:
-        return
-    if run["status"] == "failed" and alerts.get("on_failure", True):
-        text = f":red_circle: Sync *{sync['name']}* failed (run #{run_id}): {run['error']}"
-    elif run["status"] == "completed_with_errors" and alerts.get("on_rejected", True):
-        text = f":warning: Sync *{sync['name']}* completed with {run['failed']} rejected rows (run #{run_id}). First error: {run['error']}"
-    else:
-        return
-    httpx.post(url, json={"text": text}, timeout=10)
 
 
 def drop_state(sync_id: int) -> None:

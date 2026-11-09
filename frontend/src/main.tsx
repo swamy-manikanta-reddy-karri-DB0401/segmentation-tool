@@ -1,8 +1,9 @@
-import { StrictMode } from 'react'
+import { StrictMode, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Link, Route, Routes, useLocation } from 'react-router-dom'
 import './styles.css'
 import './cdp.css'
+import './kit.css'
 import Overview from './pages/Overview'
 import Sources from './pages/Sources'
 import Setup from './pages/Setup'
@@ -17,7 +18,9 @@ import Inbox from './pages/Inbox'
 import Traits from './pages/Traits'
 import Governance from './pages/Governance'
 import ThemeSwitch from './components/ThemeSwitch'
+import { ConfirmHost, QuickFind, ToastHost } from './components/kit'
 import Access from './pages/Access'
+import Alerts from './pages/Alerts'
 import { MeProvider, setPersona, useMe } from './components/me'
 import { api, getPersona } from './api'
 import { useAsync } from './components/ui'
@@ -36,6 +39,7 @@ const I = {
   destinations: 'M22 12h-6l-2 3h-4l-2-3H2M5.5 5.1L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.1z',
   syncs: 'M21 12a9 9 0 0 1-15.5 6.2M3 12a9 9 0 0 1 15.5-6.2M21 4v5h-5M3 20v-5h5',
   rules: 'M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6zM9 12l2 2 4-4',
+  alerts: 'M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0',
   access: 'M15 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM4 21v-1a6 6 0 0 1 9.5-4.9M17 14v4M17 22h.01M19 18h-4',
 }
 
@@ -57,6 +61,7 @@ const SECTIONS: { n: number; label: string; items: Item[] }[] = [
     n: 4, label: 'Activation', items: [
       { to: '/destinations', label: 'Destinations', icon: I.destinations },
       { to: '/activations', label: 'Syncs', icon: I.syncs },
+      { to: '/alerts', label: 'Alerts', icon: I.alerts },
       { to: '/governance?tab=rules', label: 'Destination rules', icon: I.rules, match: (p, s) => p === '/governance' && s.get('tab') !== 'priority' },
     ],
   },
@@ -102,13 +107,35 @@ function useActive() {
   return (item: Item) => (item.match ? item.match(loc.pathname, search) : loc.pathname === item.to || loc.pathname.startsWith(item.to + '/'))
 }
 
-function NavItem({ item, active }: { item: Item; active: boolean }) {
-  return <Link to={item.to} className={`nav-link ${active ? 'active' : ''}`}><Icon d={item.icon} />{item.label}</Link>
+function NavItem({ item, active, badge }: { item: Item; active: boolean; badge?: { n: number; critical: boolean } }) {
+  return (
+    <Link to={item.to} className={`nav-link ${active ? 'active' : ''}`}>
+      <Icon d={item.icon} />{item.label}
+      {badge && badge.n > 0 && <span className={`nav-badge ${badge.critical ? 'crit' : ''}`} aria-label={`${badge.n} active alerts`}>{badge.n > 99 ? '99+' : badge.n}</span>}
+    </Link>
+  )
+}
+
+/** Active (unmuted) alert count for the sidebar; refreshed every minute and after mute/unmute. */
+function useAlertBadge() {
+  const [badge, setBadge] = useState({ n: 0, critical: false })
+  useEffect(() => {
+    let stop = false
+    const load = () => api.get<{ status: string; muted: boolean }[]>('/alerts?status=active')
+      .then((rows) => { if (!stop) { const live = rows.filter((r) => !r.muted); setBadge({ n: live.length, critical: live.some((r) => r.status === 'critical') }) } })
+      .catch(() => undefined)
+    load()
+    const t = setInterval(load, 60000)
+    window.addEventListener('alerts:changed', load)
+    return () => { stop = true; clearInterval(t); window.removeEventListener('alerts:changed', load) }
+  }, [])
+  return badge
 }
 
 function Layout() {
   const isActive = useActive()
   const { canPlatform } = useMe()
+  const alertBadge = useAlertBadge()
   return (
     <div className="app">
       <header className="topbar">
@@ -124,12 +151,16 @@ function Layout() {
           <img src="/mediamint-logo.svg" alt="MediaMint" className="brand-logo" />
           <span className="brand-sub">Customer Data Platform</span>
         </Link>
+        <button className="side-find" onClick={() => window.dispatchEvent(new Event('quickfind:open'))} title="Find anything (Ctrl / ⌘ + K)">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" strokeWidth="1.5" /><path d="M10.5 10.5 14 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+          <span>Find anything…</span><kbd>Ctrl K</kbd>
+        </button>
         <nav className="side-nav">
           {TOP.map((n) => <NavItem key={n.to} item={n} active={isActive(n)} />)}
           {SECTIONS.map((s) => (
             <div key={s.n} className="nav-group">
               <div className="nav-section"><span className="nav-step">{s.n}</span>{s.label}</div>
-              {s.items.map((n) => <NavItem key={n.to} item={n} active={isActive(n)} />)}
+              {s.items.map((n) => <NavItem key={n.to} item={n} active={isActive(n)} badge={n.to === '/alerts' ? alertBadge : undefined} />)}
             </div>
           ))}
           {canPlatform('access.manage') && (
@@ -163,8 +194,12 @@ function Layout() {
           <Route path="/activations/:id" element={<ActivationDetail />} />
           <Route path="/inbox" element={<Inbox />} />
           <Route path="/access" element={<Access />} />
+          <Route path="/alerts" element={<Alerts />} />
         </Routes>
       </main>
+      <QuickFind />
+      <ToastHost />
+      <ConfirmHost />
     </div>
   )
 }

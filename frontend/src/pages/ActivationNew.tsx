@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, fmt } from '../api'
 import type { Audience, ConfigField, Destination, DestinationType, Mapping, Schedule, Schema, Sync, SyncConfig, SyncTemplate, SyncTypeDef } from '../api'
-import ScheduleEditor, { fromApi, toApi } from '../components/ScheduleEditor'
+import ScheduleEditor, { fromApi, scheduleLabel, toApi } from '../components/ScheduleEditor'
 import { DestIcon, Empty, ErrorBox, Field, Spinner, Toggle, useAsync } from '../components/ui'
 import { useMe } from '../components/me'
+import { matches, Pager, SearchBox, toast, usePaged } from '../components/kit'
+import '../ux/activate.css'
 
 const MODE_INFO: Record<string, string> = {
   upsert: 'Update existing records and insert new ones',
@@ -169,7 +172,8 @@ export default function ActivationNew() {
 
   const parent = schema.data?.parent
   const dest = dests.data?.find((d) => d.id === destId)
-  const { can } = useMe()
+  const me = useMe()
+  const { can } = me
   const audienceBrand = audiences.data?.find((a) => a.id === audienceId)?.brand_id ?? null
   const needsApproval = !can('syncs.approve', audienceBrand)
   // A sync can only use destinations shared across brands or owned by the audience's brand.
@@ -220,7 +224,7 @@ export default function ActivationNew() {
   const saveTemplate = async () => {
     try {
       await api.post('/sync-templates', { name: templateName, destination_id: destId, config: cfg })
-      setTemplateSaved(true); templates.reload()
+      setTemplateSaved(true); templates.reload(); toast(`Template “${templateName}” saved`)
     } catch (e) { setError((e as Error).message) }
   }
 
@@ -229,8 +233,9 @@ export default function ActivationNew() {
     const body = { name, audience_id: audienceId, destination_id: destId, config: cfg, schedule: toApi(schedule), enabled: true }
     try {
       const s = editId ? await api.put<Sync>(`/syncs/${editId}`, body) : await api.post<Sync>('/syncs', body)
-      if (s.approval_status !== 'approved') { nav(`/activations/${s.id}?submitted=1`); return }
+      if (s.approval_status !== 'approved') { toast('Submitted for approval'); nav(`/activations/${s.id}?submitted=1`); return }
       if (runNow && s.destination_configured !== false) await api.post(`/syncs/${s.id}/run`, {})
+      toast(editId ? 'Sync saved' : 'Sync created')
       nav(`/activations/${s.id}`)
     } catch (e) { setError((e as Error).message) } finally { setSaving(false) }
   }
@@ -250,196 +255,302 @@ export default function ActivationNew() {
   const identifiers = st?.identifiers.filter((i) => !i.modes.length || i.modes.includes(cfg.mode)) ?? []
   const requiredMissing = (st?.target_fields ?? []).filter((t) => t.required && !cfg.mapping.some((m) => m.target === t.name && m.source))
   const visibleOptions = st?.options.filter((o) => !o.modes.length || o.modes.includes(cfg.mode)) ?? []
-  const STEPS = ['Audience & destination', 'Configure', 'Schedule']
+  const requiredOptions = visibleOptions.filter((o) => o.required && !cfg.options[o.name])
+  const STEPS = ['Audience & destination', 'What to send', 'Name & schedule']
+  // In-place reasons why the user can't continue yet.
+  const step1Problems = [!audienceId && 'Choose an audience', !destId && 'Choose a destination'].filter(Boolean) as string[]
+  const step2Problems = [
+    identifiers.length > 0 && !cfg.match?.source && 'Choose the column used to match records',
+    ...requiredMissing.map((t) => `Map the required field “${t.label}”`),
+    ...requiredOptions.map((o) => `Fill in “${o.label}”`),
+  ].filter(Boolean) as string[]
+  const canReach = (n: number) => n === 1 ? !editId : n === 2 ? !step1Problems.length : !step1Problems.length && !step2Problems.length
+  const go = (n: number) => { if (n === 2 && step === 1) goToConfigure(); else setStep(n) }
 
   return (
-    <div className="page" style={{ maxWidth: 920 }}>
-      <div className="page-head">
-        <div><div className="eyebrow"><span className="eyebrow-n">4</span>Step 4 · Activation · <Link to="/activations">Syncs</Link></div><h1>{editId ? 'Edit sync' : 'New sync'}</h1></div>
+    <div className="page wide">
+      <div className="act-crumbs"><Link to="/activations">Syncs</Link><span>/</span><span>{editId ? 'Edit sync' : 'New sync'}</span></div>
+      <div className="act-head" style={{ marginBottom: 18 }}>
+        <div><h1>{editId ? `Edit “${name || 'sync'}”` : 'New sync'}</h1>
+          <p className="small muted" style={{ margin: '4px 0 0' }}>Send an audience to a marketing tool and keep it up to date automatically.</p></div>
       </div>
-      <div className="steps">
-        {STEPS.map((s, i) => (
-          <div key={s} className={`step ${step === i + 1 ? 'active' : step > i + 1 ? 'done' : ''}`}><span className="n">{step > i + 1 ? '✓' : i + 1}</span>{s}</div>
-        ))}
-      </div>
+      <ol className="wz-steps">
+        {STEPS.map((label, i) => {
+          const n = i + 1
+          const state = step === n ? 'active' : step > n ? 'done' : ''
+          return (
+            <li key={label} className={state}>
+              <button disabled={n === step || !canReach(n) || (n > step && n - step > 1)} onClick={() => go(n)}>
+                <span className="n">{step > n ? '✓' : n}</span>{label}
+              </button>
+            </li>
+          )
+        })}
+      </ol>
 
-      {step === 1 && (
-        <div className="card card-body stack" style={{ gap: 20 }}>
-          <Field label="Which audience?">
-            <div className="tiles">
-              {audiences.data.map((a) => (
-                <button key={a.id} className={`tile ${audienceId === a.id ? 'selected' : ''}`} onClick={() => setAudienceId(a.id)}>
-                  <div><strong>{a.name}</strong><span>{a.last_size != null ? `${fmt.num(a.last_size)} people` : 'Size not calculated'}</span></div>
-                </button>
-              ))}
-            </div>
-          </Field>
-          <Field label="Send it to…">
-            <div className="tiles">
-              {brandDests.map((d) => (
-                <button key={d.id} className={`tile ${destId === d.id ? 'selected' : ''}`} onClick={() => setDestId(d.id)}>
-                  <DestIcon type={d.type} />
-                  <div><strong>{d.name}</strong><span>{types.data?.find((t) => t.type === d.type)?.label}</span></div>
-                </button>
-              ))}
-            </div>
-          </Field>
-          <div className="row" style={{ justifyContent: 'flex-end' }}>
-            <button className="btn primary" disabled={!audienceId || !destId} onClick={goToConfigure}>Continue</button>
-          </div>
-        </div>
-      )}
+      <div className="wz-layout">
+        <div className="wz-main">
+          {step === 1 && (<>
+            <AudiencePicker audiences={audiences.data} value={audienceId} brandName={me.brandName}
+              onChange={(id) => { setAudienceId(id); const b = audiences.data!.find((a) => a.id === id)?.brand_id ?? null; if (dest && dest.brand_id != null && b != null && dest.brand_id !== b) setDestId(null) }} />
+            <DestinationPicker dests={brandDests} types={types.data ?? []} value={destId} onChange={setDestId}
+              brandNote={audience && audienceBrand != null ? `Showing ${me.brandName(audienceBrand)} destinations and shared ones.` : undefined} />
+            <WizardNav problems={step1Problems} next={<button className="btn primary" disabled={step1Problems.length > 0} onClick={goToConfigure}>Continue</button>} />
+          </>)}
 
-      {step === 2 && dtype && st && (
-        <div className="stack" style={{ gap: 16 }}>
-          {(templates.data?.length ?? 0) > 0 && (
-            <div className="card card-body row wrap">
-              <strong>Start from a template</strong>
-              {templates.data!.map((t) => <button key={t.id} className="btn sm" onClick={() => setCfg(t.config)}>{t.name}</button>)}
-              <span className="small muted">Pre-fills type, matching, mappings and delete behavior.</span>
-            </div>
-          )}
-          {dtype.sync_types.length > 1 && (
-            <div className="card card-body stack">
-              <h2>What do you want to sync?</h2>
-              <div className="tiles">
-                {dtype.sync_types.map((t) => (
-                  <button key={t.name} className={`tile ${st.name === t.name ? 'selected' : ''}`} onClick={() => chooseType(t)}>
-                    <div><strong>{t.label}</strong><span>{t.description}</span></div>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="card card-body stack">
-            {st.source === 'events' && (
-              <Field label="Which rows should be sent?" help={`Rows from this table for people in “${audience?.name}”. The table needs a primary key so each row is sent once.`}>
-                <select className="input" value={cfg.model_id ?? ''} onChange={(e) => set({ model_id: Number(e.target.value), mapping: [], options: { ...cfg.options, group_by: '' } })}>
-                  {eventModels.map((m) => <option key={m.id} value={m.id}>{m.name}{m.primary_key ? '' : ' (no primary key)'}</option>)}
-                </select>
-              </Field>
-            )}
-            {st.modes.length > 1 ? (
-              <Field label="Sync mode" help={MODE_INFO[cfg.mode]}>
-                <Toggle value={cfg.mode} options={st.modes.map((m) => ({ value: m, label: m[0].toUpperCase() + m.slice(1) }))}
-                  onChange={(m) => {
-                    const ok = st.identifiers.find((i) => i.name === cfg.match?.field && (!i.modes.length || i.modes.includes(m)))
-                    set({ mode: m, match: ok ? cfg.match : { field: st.identifiers.find((i) => !i.modes.length || i.modes.includes(m))?.name ?? '', source: cfg.match?.source ?? '' } })
-                  }} />
-              </Field>
-            ) : <div className="small muted">Sync mode: <strong>{st.modes[0][0].toUpperCase() + st.modes[0].slice(1)}</strong> — {MODE_INFO[st.modes[0]]}</div>}
-
-            {identifiers.length > 0 && (
-              <Field label="Record matching" help={`How should rows be matched to records in ${dest?.name}? Pick a column that is unique and never empty.`}>
-                <div className="map-row">
-                  <select className="input" value={cfg.match?.source ?? ''} onChange={(e) => set({ match: { field: cfg.match?.field ?? identifiers[0].name, source: e.target.value } })}>
-                    <option value="">Choose column…</option>
-                    {columns.map((c) => <option key={c} value={c}>{labels[c] ?? c}</option>)}
-                  </select>
-                  <span className="faint" style={{ textAlign: 'center' }}>=</span>
-                  <select className="input" value={cfg.match?.field ?? ''} onChange={(e) => set({ match: { source: cfg.match?.source ?? '', field: e.target.value } })}>
-                    {identifiers.map((i) => <option key={i.name} value={i.name}>{i.label}</option>)}
-                  </select>
-                  <span />
+          {step === 2 && dtype && st && (
+            <div className="stack" style={{ gap: 16 }}>
+              {(templates.data?.length ?? 0) > 0 && (
+                <div className="card card-body row wrap">
+                  <strong>Start from a template</strong>
+                  {templates.data!.map((t) => <button key={t.id} className="btn sm" onClick={() => { setCfg(t.config); toast(`Applied template “${t.name}”`, 'info') }}>{t.name}</button>)}
+                  <span className="small muted">Pre-fills type, matching, mappings and delete behavior.</span>
                 </div>
-              </Field>
-            )}
+              )}
+              {dtype.sync_types.length > 1 && (
+                <div className="card card-body stack">
+                  <h2>What do you want to sync?</h2>
+                  <div className="tiles">
+                    {dtype.sync_types.map((t) => (
+                      <button key={t.name} className={`tile ${st.name === t.name ? 'selected' : ''}`} onClick={() => chooseType(t)}>
+                        <div><strong>{t.label}</strong><span>{t.description}</span></div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
 
-            {visibleOptions.map((o) => (
-              <Field key={o.name} label={`${o.label}${o.required ? '' : ' (optional)'}`} help={o.help}>
-                <OptionInput field={o} value={cfg.options[o.name]} columns={columns} onChange={(v) => set({ options: { ...cfg.options, [o.name]: v } })} />
-                {dest?.type === 'gam' && o.name === 'list_id' && !cfg.options.list_id && (
-                  <CreateSegment destId={dest.id} defaultName={audience?.name ?? ''} days={cfg.options.membership_days}
-                    onCreated={(id) => set({ options: { ...cfg.options, list_id: id } })} />
+              <div className="card card-body stack">
+                <h2>How records are matched</h2>
+                {st.source === 'events' && (
+                  <Field label="Which rows should be sent?" help={`Rows from this table for people in “${audience?.name}”. The table needs a primary key so each row is sent once.`}>
+                    <select className="input" value={cfg.model_id ?? ''} onChange={(e) => set({ model_id: Number(e.target.value), mapping: [], options: { ...cfg.options, group_by: '' } })}>
+                      {eventModels.map((m) => <option key={m.id} value={m.id}>{m.name}{m.primary_key ? '' : ' (no primary key)'}</option>)}
+                    </select>
+                  </Field>
                 )}
-              </Field>
-            ))}
-          </div>
+                {st.modes.length > 1 ? (
+                  <Field label="Sync mode" help={MODE_INFO[cfg.mode]}>
+                    <Toggle value={cfg.mode} options={st.modes.map((m) => ({ value: m, label: m[0].toUpperCase() + m.slice(1) }))}
+                      onChange={(m) => {
+                        const ok = st.identifiers.find((i) => i.name === cfg.match?.field && (!i.modes.length || i.modes.includes(m)))
+                        set({ mode: m, match: ok ? cfg.match : { field: st.identifiers.find((i) => !i.modes.length || i.modes.includes(m))?.name ?? '', source: cfg.match?.source ?? '' } })
+                      }} />
+                  </Field>
+                ) : <div className="small muted">Sync mode: <strong>{st.modes[0][0].toUpperCase() + st.modes[0].slice(1)}</strong> — {MODE_INFO[st.modes[0]] ?? 'Adds and removes people'}</div>}
 
-          <div className="card card-body stack">
-            <div className="spread">
-              <div>
-                <h2>Field mapping</h2>
-                <div className="small muted">Choose which columns populate which {dest?.name} fields.{st.custom_fields && ' Type a new field name to create a custom field.'}</div>
-              </div>
-              {st.target_fields.length > 0 && <button className="btn sm" onClick={() => set({ mapping: [...cfg.mapping.filter((m) => !suggest(columns, st.target_fields).some((x) => x.target === m.target)), ...suggest(columns, st.target_fields)] })}>Suggest mappings</button>}
-            </div>
-            {cfg.mapping.map((m, i) => (
-              <MappingRow key={i} m={m} columns={columns} labels={labels} st={st}
-                onChange={(x) => set({ mapping: cfg.mapping.map((y, j) => (j === i ? x : y)) })}
-                onRemove={() => set({ mapping: cfg.mapping.filter((_, j) => j !== i) })} />
-            ))}
-            <div><button className="btn ghost sm" onClick={() => set({ mapping: [...cfg.mapping, { source: '', target: '' }] })}>+ Add mapping</button></div>
-            {requiredMissing.length > 0 && <div className="alert info">Required: {requiredMissing.map((t) => t.label).join(', ')}</div>}
-          </div>
+                {identifiers.length > 0 && (
+                  <Field label="Record matching" help={`How rows are matched to records in ${dest?.name}. Pick a column that is unique and never empty.`}>
+                    <div className="map-row">
+                      <select className={`input ${!cfg.match?.source ? 'wz-invalid' : ''}`} value={cfg.match?.source ?? ''} onChange={(e) => set({ match: { field: cfg.match?.field ?? identifiers[0].name, source: e.target.value } })}>
+                        <option value="">Choose column…</option>
+                        {columns.map((c) => <option key={c} value={c}>{labels[c] ?? c}</option>)}
+                      </select>
+                      <span className="faint" style={{ textAlign: 'center' }}>=</span>
+                      <select className="input" value={cfg.match?.field ?? ''} onChange={(e) => set({ match: { source: cfg.match?.source ?? '', field: e.target.value } })}>
+                        {identifiers.map((i) => <option key={i.name} value={i.name}>{i.label}</option>)}
+                      </select>
+                      <span />
+                    </div>
+                  </Field>
+                )}
 
-          <ErrorBox error={error} />
-          <div className="spread">
-            <button className="btn" onClick={() => setStep(1)} disabled={!!editId}>Back</button>
-            <button className="btn primary" disabled={requiredMissing.length > 0 || (identifiers.length > 0 && !cfg.match?.source)} onClick={() => setStep(3)}>Continue</button>
-          </div>
-        </div>
-      )}
-
-      {step === 3 && st && (
-        <div className="card card-body stack" style={{ gap: 18 }}>
-          <Field label="Name"><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></Field>
-          {st.source === 'audience' && Object.keys(st.delete_behaviors).length > 1 && (
-            <Field label="Delete behavior" help="What should happen when someone no longer appears in the audience?">
-              <div className="stack" style={{ gap: 6 }}>
-                {Object.entries(st.delete_behaviors).map(([k, desc]) => (
-                  <label key={k} className="row" style={{ alignItems: 'flex-start' }}>
-                    <input type="radio" name="delete" checked={cfg.delete_behavior === k} onChange={() => set({ delete_behavior: k })} />
-                    <span><strong>{({ do_nothing: 'Do nothing', clear: 'Clear', delete: 'Delete', remove: 'Remove' } as Record<string, string>)[k]}</strong><div className="small muted">{desc}</div></span>
-                  </label>
+                {visibleOptions.map((o) => (
+                  <Field key={o.name} label={`${o.label}${o.required ? '' : ' (optional)'}`} help={o.help}>
+                    <OptionInput field={o} value={cfg.options[o.name]} columns={columns} onChange={(v) => set({ options: { ...cfg.options, [o.name]: v } })} />
+                    {dest?.type === 'gam' && o.name === 'list_id' && !cfg.options.list_id && (
+                      <CreateSegment destId={dest.id} defaultName={audience?.name ?? ''} days={cfg.options.membership_days}
+                        onCreated={(id) => { set({ options: { ...cfg.options, list_id: id } }); toast(`Segment ${id} created in Ad Manager`) }} />
+                    )}
+                  </Field>
                 ))}
               </div>
-            </Field>
-          )}
-          {st.source === 'audience' && audience?.splits?.enabled && (
-            <Field label="Split group" help="Send only the members assigned to one group of the audience's A/B split.">
-              <select className="input" style={{ maxWidth: 260 }} value={cfg.split_group ?? ''} onChange={(e) => set({ split_group: e.target.value || null })}>
-                <option value="">Everyone (no split)</option>
-                {audience.splits.groups.map((g) => <option key={g.name} value={g.name}>{g.name} ({g.percent}%)</option>)}
-              </select>
-            </Field>
-          )}
-          <ScheduleEditor value={schedule} onChange={setSchedule} />
-          <Field label="Alerts" help="Post to a Slack (or any) incoming-webhook URL when a run fails or rejects rows.">
-            <input className="input" placeholder="https://hooks.slack.com/services/…" value={cfg.alerts?.webhook_url ?? ''}
-              onChange={(e) => set({ alerts: { on_failure: true, on_rejected: true, ...cfg.alerts, webhook_url: e.target.value } })} />
-            {cfg.alerts?.webhook_url && (
-              <div className="row small">
-                <label className="row"><input type="checkbox" checked={cfg.alerts.on_failure !== false} onChange={(e) => set({ alerts: { ...cfg.alerts, on_failure: e.target.checked } })} /> Run fails</label>
-                <label className="row"><input type="checkbox" checked={cfg.alerts.on_rejected !== false} onChange={(e) => set({ alerts: { ...cfg.alerts, on_rejected: e.target.checked } })} /> Rows rejected</label>
+
+              <div className="card card-body stack">
+                <div className="spread">
+                  <div>
+                    <h2>Fields to send</h2>
+                    <div className="small muted">Choose which columns populate which {dest?.name} fields.{st.custom_fields && ' Type a new field name to create a custom field.'}</div>
+                  </div>
+                  {st.target_fields.length > 0 && <button className="btn sm" onClick={() => { set({ mapping: [...cfg.mapping.filter((m) => !suggest(columns, st.target_fields).some((x) => x.target === m.target)), ...suggest(columns, st.target_fields)] }); toast('Suggested mappings added', 'info') }}>Suggest mappings</button>}
+                </div>
+                {cfg.mapping.map((m, i) => (
+                  <MappingRow key={i} m={m} columns={columns} labels={labels} st={st}
+                    onChange={(x) => set({ mapping: cfg.mapping.map((y, j) => (j === i ? x : y)) })}
+                    onRemove={() => set({ mapping: cfg.mapping.filter((_, j) => j !== i) })} />
+                ))}
+                {!cfg.mapping.length && <div className="small muted">No fields mapped yet — only the matching identifier will be sent.</div>}
+                <div><button className="btn ghost sm" onClick={() => set({ mapping: [...cfg.mapping, { source: '', target: '' }] })}>+ Add field</button></div>
               </div>
-            )}
-          </Field>
-          <Field label="Save as a template (optional)" help="Reuse this configuration for other audiences sent to the same destination.">
-            <div className="row">
-              <input className="input" style={{ maxWidth: 260 }} placeholder="Template name" value={templateName} onChange={(e) => { setTemplateName(e.target.value); setTemplateSaved(false) }} />
-              <button className="btn sm" disabled={!templateName.trim()} onClick={saveTemplate}>{templateSaved ? 'Saved ✓' : 'Save template'}</button>
+
+              <ErrorBox error={error} />
+              <WizardNav problems={step2Problems}
+                back={<button className="btn" onClick={() => setStep(1)} disabled={!!editId}>Back</button>}
+                next={<button className="btn primary" disabled={step2Problems.length > 0} onClick={() => setStep(3)}>Continue</button>} />
             </div>
-          </Field>
-          {needsApproval ? (
-            <div className="callout amber" style={{ marginBottom: 0 }}>
-              <div className="callout-icon">✓</div>
-              <div className="grow">
-                <strong>This sync will be submitted for approval</strong>
-                <div className="small muted">A Brand Marketing Admin reviews it before anything is sent to {dest?.name ?? 'the destination'}.</div>
-              </div>
-            </div>
-          ) : (
-            <label className="row small"><input type="checkbox" checked={runNow} onChange={(e) => setRunNow(e.target.checked)} /> Run once right after saving</label>
           )}
-          <ErrorBox error={error} />
-          <div className="spread">
-            <button className="btn" onClick={() => setStep(2)}>Back</button>
-            <button className="btn primary" onClick={save} disabled={saving || !name}>{saving ? 'Saving…' : needsApproval ? 'Submit for approval' : editId ? 'Save changes' : 'Create sync'}</button>
+
+          {step === 3 && st && (
+            <div className="card card-body stack" style={{ gap: 18 }}>
+              <Field label="Sync name" help="Shown in the syncs list and in alerts.">
+                <input className={`input ${!name.trim() ? 'wz-invalid' : ''}`} value={name} onChange={(e) => setName(e.target.value)} />
+              </Field>
+              {st.source === 'audience' && Object.keys(st.delete_behaviors).length > 1 && (
+                <Field label="When someone leaves the audience" help="What should happen in the destination when a person no longer qualifies?">
+                  <div className="wz-radios">
+                    {Object.entries(st.delete_behaviors).map(([k, desc]) => (
+                      <label key={k} className={cfg.delete_behavior === k ? 'on' : ''}>
+                        <input type="radio" name="delete" checked={cfg.delete_behavior === k} onChange={() => set({ delete_behavior: k })} />
+                        <span><strong>{({ do_nothing: 'Do nothing', clear: 'Clear', delete: 'Delete', remove: 'Remove' } as Record<string, string>)[k]}</strong><div className="small muted">{desc}</div></span>
+                      </label>
+                    ))}
+                  </div>
+                </Field>
+              )}
+              {st.source === 'audience' && audience?.splits?.enabled && (
+                <Field label="Split group" help="Send only the members assigned to one group of the audience's A/B split.">
+                  <select className="input" style={{ maxWidth: 260 }} value={cfg.split_group ?? ''} onChange={(e) => set({ split_group: e.target.value || null })}>
+                    <option value="">Everyone (no split)</option>
+                    {audience.splits.groups.map((g) => <option key={g.name} value={g.name}>{g.name} ({g.percent}%)</option>)}
+                  </select>
+                </Field>
+              )}
+              <ScheduleEditor value={schedule} onChange={setSchedule} />
+              <details className="wz-more">
+                <summary>Alerts and templates</summary>
+                <div className="stack" style={{ gap: 14, marginTop: 12 }}>
+                  <Field label="Alerts" help="Post to a Slack (or any) incoming-webhook URL when a run fails or rejects rows.">
+                    <input className="input" placeholder="https://hooks.slack.com/services/…" value={cfg.alerts?.webhook_url ?? ''}
+                      onChange={(e) => set({ alerts: { on_failure: true, on_rejected: true, ...cfg.alerts, webhook_url: e.target.value } })} />
+                    {cfg.alerts?.webhook_url && (
+                      <div className="row small">
+                        <label className="row"><input type="checkbox" checked={cfg.alerts.on_failure !== false} onChange={(e) => set({ alerts: { ...cfg.alerts, on_failure: e.target.checked } })} /> Run fails</label>
+                        <label className="row"><input type="checkbox" checked={cfg.alerts.on_rejected !== false} onChange={(e) => set({ alerts: { ...cfg.alerts, on_rejected: e.target.checked } })} /> Rows rejected</label>
+                      </div>
+                    )}
+                  </Field>
+                  <Field label="Save as a template" help="Reuse this configuration for other audiences sent to the same destination.">
+                    <div className="row">
+                      <input className="input" style={{ maxWidth: 260 }} placeholder="Template name" value={templateName} onChange={(e) => { setTemplateName(e.target.value); setTemplateSaved(false) }} />
+                      <button className="btn sm" disabled={!templateName.trim()} onClick={saveTemplate}>{templateSaved ? 'Saved ✓' : 'Save template'}</button>
+                    </div>
+                  </Field>
+                </div>
+              </details>
+              {needsApproval ? (
+                <div className="callout amber" style={{ marginBottom: 0 }}>
+                  <div className="callout-icon">✓</div>
+                  <div className="grow">
+                    <strong>This sync will be submitted for approval</strong>
+                    <div className="small muted">A Brand Marketing Admin reviews it before anything is sent to {dest?.name ?? 'the destination'}. You'll see its status on the sync page.</div>
+                  </div>
+                </div>
+              ) : dest?.configured === false ? (
+                <div className="small muted">Runs start automatically once {dest.name} credentials are added.</div>
+              ) : (
+                <label className="row small"><input type="checkbox" checked={runNow} onChange={(e) => setRunNow(e.target.checked)} /> Run once right after saving</label>
+              )}
+              <ErrorBox error={error} />
+              <WizardNav problems={name.trim() ? [] : ['Give the sync a name']}
+                back={<button className="btn" onClick={() => setStep(2)}>Back</button>}
+                next={<button className="btn primary" onClick={save} disabled={saving || !name.trim()}>{saving ? 'Saving…' : needsApproval ? 'Submit for approval' : editId ? 'Save changes' : 'Create sync'}</button>} />
+            </div>
+          )}
+        </div>
+
+        <aside className="wz-summary card" aria-label="Summary">
+          <div className="act-card-k">Summary</div>
+          <SummaryRow k="Audience" v={audience ? audience.name : null} sub={audience?.last_size != null ? `${fmt.num(audience.last_size)} people` : undefined} />
+          <SummaryRow k="Destination" v={dest ? dest.name : null} icon={dest ? <DestIcon type={dest.type} size={20} /> : undefined}
+            sub={dest?.configured === false ? 'Credentials needed' : dtype?.label} warn={dest?.configured === false} />
+          {step >= 2 && st && <SummaryRow k="Sending" v={`${st.label} · ${cfg.mode ? cfg.mode[0].toUpperCase() + cfg.mode.slice(1) : ''}`}
+            sub={cfg.mapping.filter((m) => m.target).length ? `${cfg.mapping.filter((m) => m.target).length} field${cfg.mapping.filter((m) => m.target).length === 1 ? '' : 's'}` : undefined} />}
+          {step >= 3 && <SummaryRow k="Schedule" v={scheduleLabel(toApi(schedule))} />}
+          <div className={`wz-approval ${needsApproval ? 'amber' : 'green'}`}>
+            {needsApproval ? 'Needs approval by a Brand Marketing Admin before it runs' : 'You can publish this directly'}
           </div>
+        </aside>
+      </div>
+    </div>
+  )
+}
+
+function SummaryRow({ k, v, sub, icon, warn }: { k: string; v: string | null; sub?: string; icon?: ReactNode; warn?: boolean }) {
+  return (
+    <div className="wz-sum-row">
+      <span>{k}</span>
+      {v ? <strong className="row" style={{ gap: 6 }}>{icon}<span className="act-ellipsis">{v}</span></strong> : <em>Not chosen yet</em>}
+      {sub && <small className={warn ? 'wz-warn' : ''}>{sub}</small>}
+    </div>
+  )
+}
+
+function WizardNav({ problems, back, next }: { problems: string[]; back?: ReactNode; next: ReactNode }) {
+  return (
+    <div className="wz-nav">
+      {back ?? <span />}
+      <div className="row" style={{ gap: 12 }}>
+        {problems.length > 0 && <span className="small wz-problems" role="status">{problems[0]}{problems.length > 1 ? ` (+${problems.length - 1} more)` : ''}</span>}
+        {next}
+      </div>
+    </div>
+  )
+}
+
+/** Searchable, paginated audience list — scales to hundreds of audiences. */
+function AudiencePicker({ audiences, value, onChange, brandName }: { audiences: Audience[]; value: number | null; onChange: (id: number) => void; brandName: (id: number | null | undefined) => string }) {
+  const [q, setQ] = useState('')
+  const brands = new Set(audiences.map((a) => a.brand_id ?? null))
+  const rows = audiences.filter((a) => matches(q, a.name, a.description, a.parent_name, brandName(a.brand_id)))
+    .sort((a, b) => Number(b.id === value) - Number(a.id === value) || a.name.localeCompare(b.name))
+  const paged = usePaged(rows, 8, q)
+  return (
+    <section className="card wz-pick">
+      <div className="wz-pick-head">
+        <div><h2>Which audience?</h2><div className="small muted">The people to send. Members are added and removed as the audience changes.</div></div>
+        {audiences.length > 6 && <SearchBox value={q} onChange={setQ} placeholder={`Search ${audiences.length} audiences…`} />}
+      </div>
+      <div className="wz-options" role="radiogroup" aria-label="Audience">
+        {paged.slice.map((a) => (
+          <button key={a.id} role="radio" aria-checked={value === a.id} className={`wz-option ${value === a.id ? 'on' : ''}`} onClick={() => onChange(a.id)}>
+            <span className="wz-radio" aria-hidden="true" />
+            <span className="wz-opt-main">
+              <strong className="act-ellipsis">{a.name}</strong>
+              <small className="act-ellipsis">{a.description || `Built on ${a.parent_name ?? 'the parent model'}`}</small>
+            </span>
+            {brands.size > 1 && <span className="badge">{brandName(a.brand_id)}</span>}
+            <span className="wz-opt-size">{a.last_size != null ? <><strong>{fmt.compact(a.last_size)}</strong> people</> : <span className="faint">Not calculated</span>}</span>
+          </button>
+        ))}
+        {!rows.length && <div className="dm-none">No audiences match “{q}”.</div>}
+      </div>
+      {rows.length > 8 && <div className="act-pager"><Pager page={paged.page} pages={paged.pages} total={rows.length} pageSize={8} onPage={paged.setPage} noun="audience" /></div>}
+    </section>
+  )
+}
+
+function DestinationPicker({ dests, types, value, onChange, brandNote }: { dests: Destination[]; types: DestinationType[]; value: number | null; onChange: (id: number) => void; brandNote?: string }) {
+  const [q, setQ] = useState('')
+  const label = (t: string) => types.find((x) => x.type === t)?.label ?? t
+  const rows = dests.filter((d) => matches(q, d.name, label(d.type)))
+  return (
+    <section className="card wz-pick">
+      <div className="wz-pick-head">
+        <div><h2>Send it to…</h2><div className="small muted">{brandNote ?? 'The marketing tool that receives the audience.'}</div></div>
+        {dests.length > 6 && <SearchBox value={q} onChange={setQ} placeholder={`Search ${dests.length} destinations…`} />}
+      </div>
+      {!dests.length ? <div className="dm-none">No destinations for this brand yet. <Link to="/destinations">Add one</Link>.</div> : (
+        <div className="wz-dest-grid" role="radiogroup" aria-label="Destination">
+          {rows.map((d) => (
+            <button key={d.id} role="radio" aria-checked={value === d.id} className={`wz-dest ${value === d.id ? 'on' : ''}`} onClick={() => onChange(d.id)}>
+              <DestIcon type={d.type} size={34} />
+              <span className="wz-opt-main"><strong className="act-ellipsis" title={d.name}>{d.name}</strong><small className="act-ellipsis">{label(d.type)}</small>
+                {d.configured === false && <span className="wz-dest-warn" title="Syncs wait until credentials are added">● Needs credentials</span>}</span>
+            </button>
+          ))}
+          {!rows.length && <div className="dm-none">No destinations match “{q}”.</div>}
         </div>
       )}
-    </div>
+    </section>
   )
 }

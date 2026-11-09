@@ -118,13 +118,36 @@ _group_cache: dict[str, tuple[list[str], float]] = {}
 _group_lock = threading.Lock()
 
 
-def _groups_for(email: str) -> list[str]:
+def _host() -> str:
+    h = os.environ.get("DATABRICKS_HOST", "").rstrip("/")
+    return h if not h or h.startswith("http") else "https://" + h
+
+
+def _groups_from_user_token(token: str) -> list[str]:
+    """The signed-in person's own groups, read with their forwarded token (Databricks Apps user
+    authorization, identity-only scope). The app's service principal can't see other users' groups."""
+    import httpx
+    r = httpx.get(f"{_host()}/api/2.0/preview/scim/v2/Me", headers={"Authorization": f"Bearer {token}"}, timeout=15)
+    r.raise_for_status()
+    return [g["display"] for g in r.json().get("groups", []) if g.get("display")]
+
+
+def _groups_for(email: str, user_token: str | None = None) -> list[str]:
     """Databricks workspace groups of a user (cached for 5 minutes). Empty if the lookup isn't possible."""
     with _group_lock:
         hit = _group_cache.get(email)
         if hit and hit[1] > time.time():
             return hit[0]
     groups: list[str] = []
+    if user_token:
+        try:
+            groups = _groups_from_user_token(user_token)
+            _note_lookup("user token", email, groups, "")
+        except Exception as e:  # noqa: BLE001
+            _note_lookup("user token", email, [], f"{type(e).__name__}: {str(e)[:200]}")
+        with _group_lock:
+            _group_cache[email] = (groups, time.time() + 300)
+        return groups
     try:
         from databricks.sdk import WorkspaceClient
         w = WorkspaceClient() if IN_DATABRICKS_APP else _local_client()
@@ -136,6 +159,33 @@ def _groups_for(email: str) -> list[str]:
     with _group_lock:
         _group_cache[email] = (groups, time.time() + 300)
     return groups
+
+
+def check_group_lookup() -> dict:
+    """Self-test: can this app read a user's Databricks groups? Looks up the first configured Platform Admin
+    with the same identity real requests use, and stores the outcome in the setting `group_lookup`."""
+    email = next((x for x in sorted(_platform_admin_names()) if "@" in x), "")
+    result: dict = {"at": db.now(), "email": email, "identity": "app service principal" if IN_DATABRICKS_APP else "local token"}
+    try:
+        from databricks.sdk import WorkspaceClient
+        w = WorkspaceClient() if IN_DATABRICKS_APP else _local_client()
+        if not w or not email:
+            raise ValueError("No Databricks client or no Platform Admin email to look up")
+        users = list(w.users.list(filter=f'userName eq "{email}"', attributes="groups"))
+        groups = [g.display for u in users for g in (u.groups or []) if g.display]
+        result.update(ok=bool(groups), users_found=len(users), groups=groups,
+                      error="" if groups else ("User visible but no groups returned" if users else "User not visible"))
+        try:  # alternative: list groups with members and look for the user
+            uid = users[0].id if users else None
+            listed = [g.display_name for g in w.groups.list(attributes="displayName,members")
+                      if uid and any(m.value == uid for m in (g.members or []))]
+            result["groups_via_group_listing"] = listed
+        except Exception as e:  # noqa: BLE001
+            result["groups_via_group_listing_error"] = f"{type(e).__name__}: {str(e)[:200]}"
+    except Exception as e:  # noqa: BLE001
+        result.update(ok=False, users_found=0, groups=[], error=f"{type(e).__name__}: {str(e)[:300]}")
+    db.set_setting("group_lookup", result)
+    return result
 
 
 def _local_client():
@@ -151,9 +201,22 @@ def _platform_admin_names() -> set[str]:
     return {x.strip().lower() for x in raw.split(",") if x.strip()}
 
 
-def load_user(email: str, name: str = "", groups: list[str] | None = None) -> User:
+_noted: set[str] = set()
+
+
+def _note_lookup(method: str, email: str, groups: list[str], error: str) -> None:
+    """Record how group lookup went for the first request of each person per app start (diagnostics)."""
+    if email in _noted:
+        return
+    _noted.add(email)
+    seen = db.get_setting("group_lookup_requests") or {}
+    seen[email] = {"at": db.now(), "method": method, "groups": groups, "error": error}
+    db.set_setting("group_lookup_requests", dict(list(seen.items())[-20:]))
+
+
+def load_user(email: str, name: str = "", groups: list[str] | None = None, user_token: str | None = None) -> User:
     email = email.strip().lower()
-    groups = groups if groups is not None else _groups_for(email)
+    groups = groups if groups is not None else _groups_for(email, user_token)
     low_groups = {g.lower() for g in groups}
     rows = db.query("SELECT * FROM role_bindings")
     bindings = [Binding(r["role"], r["brand_id"], [int(x) for x in r["destination_ids"] or []]) for r in rows
@@ -170,7 +233,8 @@ def _resolve(headers) -> User:
         email = headers.get("x-forwarded-email") or headers.get("x-forwarded-preferred-username") or ""
         if not email:
             raise HTTPException(401, "Sign in through Databricks to use this app")
-        return load_user(email, headers.get("x-forwarded-preferred-username") or "")
+        return load_user(email, headers.get("x-forwarded-preferred-username") or "",
+                         user_token=headers.get("x-forwarded-access-token"))
     persona = headers.get("x-dev-user")
     if persona:
         return load_user(persona, groups=[])
