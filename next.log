@@ -68,3 +68,47 @@
  ✓ Compiled /alerts in 324ms (639 modules)
  GET /alerts 200 in 396ms
  GET /connections/sources 200 in 23ms
+ GET /segments 200 in 46ms
+ GET /alerts 200 in 16ms
+ GET /syncs 200 in 18ms
+ GET /alerts 200 in 12ms
+ GET /segments 200 in 12ms
+ GET /schema 200 in 22ms
+ GET /connections/sources 200 in 12ms
+ GET /connections/destinations 200 in 23ms
+ GET /connections/sources 200 in 13ms
+ GET /alerts 200 in 12ms
+ GET /schema 200 in 31ms
+ GET /segments 200 in 12ms
+ GET /segments/new 200 in 66ms
+ GET /segments 200 in 15ms
+ GET /syncs 200 in 14ms
+ GET /segments 200 in 15ms
+ GET /segments/3 200 in 60ms
+ GET /segments 200 in 17ms
+ GET /syncs 200 in 12ms
+ GET /alerts 200 in 14ms
+ GET /connections/sources 200 in 16ms
+ GET /connections/destinations 200 in 16ms
+ GET /segments 200 in 180ms
+ GET /connections/sources 200 in 343ms
+ GET /schema 200 in 255ms
+ GET /syncs 200 in 108ms
+ GET /connections/sources 200 in 96ms
+ GET /schema 200 in 23ms
+ GET /connections/sources 200 in 121ms
+ GET /schema 200 in 52ms
+ GET /segments 200 in 49ms
+ GET /syncs 200 in 20ms
+ GET /alerts 200 in 114ms
+ GET /schema 200 in 28ms
+ GET /connections/sources 200 in 62ms
+ GET /schema 200 in 142ms
+ GET /segments 200 in 50ms
+ GET /segments/new 200 in 368ms
+ GET /segments 200 in 40ms
+ GET /syncs 200 in 53ms
+ GET /connections/destinations 200 in 129ms
+ GET /syncs 200 in 376ms
+ GET /connections/sources 200 in 3748ms
+ GET /connections/sources 200 in 421ms
