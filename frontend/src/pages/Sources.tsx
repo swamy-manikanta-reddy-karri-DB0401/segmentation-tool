@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { api, fmt } from '../api'
 import type { Dataset, SourceConnection, SourcesResponse, SourceStatus, SourceTable, Warehouse } from '../api'
 import { Empty, ErrorBox, Field, Modal, PageHead, Spinner, Toggle, useAsync } from '../components/ui'
+import { useMe } from '../components/me'
 
 const MASK = '••••••••'
 const AUTH_LABEL = { oauth: 'Service principal (OAuth)', pat: 'Personal access token' }
@@ -153,6 +154,7 @@ function DatasetCard({ d, connectionId, onOpen }: { d: Dataset; connectionId: nu
 }
 
 export default function Sources() {
+  const admin = useMe().canPlatform('source.manage')
   const sources = useAsync(() => api.get<SourcesResponse>('/sources'))
   const [open, setOpen] = useState<{ table: SourceTable; cid: number } | null>(null)
   const [editing, setEditing] = useState<{ existing?: SourceStatus } | null>(null)
@@ -167,12 +169,13 @@ export default function Sources() {
     <div className="page">
       <PageHead stage="source" title="Sources"
         subtitle="Databricks connections your data platform reads from. Each signs in as its own identity; data is queried in place — never copied."
-        actions={<button className="btn primary" onClick={() => setEditing({})}>+ Add connection</button>} />
+        actions={admin ? <button className="btn primary" onClick={() => setEditing({})}>+ Add connection</button>
+          : <span className="badge" title="Only Platform Admins can manage Databricks sources">View only</span>} />
       <ErrorBox error={sources.error} />
 
       {sources.loading ? <Spinner label="Checking connections and reading Unity Catalog…" /> : !conns.length ? (
         <div className="card">
-          <Empty title="No Databricks connection yet" action={<button className="btn primary" onClick={() => setEditing({})}>Add connection</button>}>
+          <Empty title="No Databricks connection yet" action={admin ? <button className="btn primary" onClick={() => setEditing({})}>Add connection</button> : undefined}>
             Connect a workspace with a service principal to start modeling your data.
           </Empty>
         </div>
@@ -188,8 +191,8 @@ export default function Sources() {
                 {c.ok ? <span className="badge green"><span className="dot" />Connected</span> : <span className="badge red"><span className="dot" />Not connected</span>}
                 <span className={`badge ${c.auth_type === 'oauth' ? 'brand' : 'amber'}`}>{AUTH_LABEL[c.auth_type]}</span>
                 <span className="grow" />
-                {!c.parents?.length && <button className="btn ghost sm danger" onClick={() => remove(c)}>Remove</button>}
-                <button className="btn sm" onClick={() => setEditing({ existing: c })}>Edit</button>
+                {admin && !c.parents?.length && <button className="btn ghost sm danger" onClick={() => remove(c)}>Remove</button>}
+                {admin && <button className="btn sm" onClick={() => setEditing({ existing: c })}>Edit</button>}
               </div>
               <div className="source-meta">
                 <div><span>Workspace</span><strong className="mono">{c.host.replace('https://', '')}</strong></div>
@@ -205,7 +208,7 @@ export default function Sources() {
               {c.error && <ErrorBox error={c.error} />}
             </div>
           </div>
-          {c.datasets.map((d) => <DatasetCard key={`${d.catalog}.${d.schema}`} d={d} connectionId={c.id} onOpen={(table, cid) => setOpen({ table, cid })} />)}
+          {c.datasets.map((d) => <DatasetCard key={`${d.catalog}.${d.schema}`} d={d} connectionId={c.id} onOpen={(table, cid) => admin && setOpen({ table, cid })} />)}
         </div>
       ))}
       {open && <PreviewModal table={open.table} connectionId={open.cid} onClose={() => setOpen(null)} />}

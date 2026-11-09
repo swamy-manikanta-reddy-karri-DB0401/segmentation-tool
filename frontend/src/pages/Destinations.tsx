@@ -3,7 +3,9 @@ import { api } from '../api'
 import type { Destination, DestinationType } from '../api'
 import { Link } from 'react-router-dom'
 import { DestIcon, Empty, ErrorBox, Field, Modal, PageHead, Spinner, useAsync } from '../components/ui'
+import { useMe } from '../components/me'
 
+const MASK = '••••••••'
 const INBOX_URL = `${window.location.protocol}//${window.location.hostname}:8100/api/inbox`
 
 function DestinationModal({ types, existing, onClose, onSaved }: {
@@ -16,6 +18,9 @@ function DestinationModal({ types, existing, onClose, onSaved }: {
   const [testing, setTesting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const me = useMe()
+  const brands = me.brandsWith('destinations.manage')
+  const [brandId, setBrandId] = useState<number | null>(existing ? existing.brand_id ?? null : brands[0]?.id ?? null)
 
   const choose = (t: DestinationType) => {
     setType(t)
@@ -24,13 +29,13 @@ function DestinationModal({ types, existing, onClose, onSaved }: {
   }
   const runTest = async () => {
     setTesting(true); setTest(null)
-    try { setTest(await api.post('/destinations/test', { type: type!.type, config, id: existing?.id })) } finally { setTesting(false) }
+    try { setTest(await api.post('/destinations/test', { type: type!.type, config, id: existing?.id, brand_id: brandId })) } finally { setTesting(false) }
   }
   const save = async () => {
     setSaving(true); setError(null)
     try {
       if (existing) await api.put(`/destinations/${existing.id}`, { name, config })
-      else await api.post('/destinations', { name, type: type!.type, config })
+      else await api.post('/destinations', { name, type: type!.type, config, brand_id: brandId })
       onSaved()
     } catch (e) { setError((e as Error).message) } finally { setSaving(false) }
   }
@@ -74,10 +79,26 @@ function DestinationModal({ types, existing, onClose, onSaved }: {
         <button className="btn primary" onClick={save} disabled={saving || missing || !name}>{saving ? 'Saving…' : 'Save'}</button>
       </>}>
       <Field label="Name"><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></Field>
+      {!existing && (brands.length > 1 || me.me?.platform_admin) && (
+        <Field label="Brand" help="Only this brand's syncs can send to this destination. “Shared” destinations can be used by every brand and are managed by Platform Admins.">
+          <select className="input" value={brandId ?? ''} onChange={(e) => setBrandId(e.target.value ? Number(e.target.value) : null)}>
+            {brands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            {me.me?.platform_admin && <option value="">Shared across brands</option>}
+          </select>
+        </Field>
+      )}
       {type.config_fields.map((f) => (
         <Field key={f.name} label={`${f.label}${f.required ? '' : ' (optional)'}`} help={f.help}>
-          {f.type === 'textarea' ? (
-            <textarea className="input" value={config[f.name] ?? ''} onChange={(e) => setConfig({ ...config, [f.name]: e.target.value })} />
+          {f.type === 'textarea' && f.secret && config[f.name] === MASK ? (
+            <div className="secret-saved">
+              <span className="badge green"><span className="dot" />Saved</span>
+              <span className="small muted">Stored securely and never shown again.</span>
+              <button className="btn ghost sm" onClick={() => setConfig({ ...config, [f.name]: '' })}>Replace</button>
+            </div>
+          ) : f.type === 'textarea' ? (
+            <textarea className={`input ${f.secret ? 'mono' : ''}`} rows={f.secret ? 6 : 3} value={config[f.name] ?? ''}
+              placeholder={f.secret ? '{ "type": "service_account", "client_email": "…", "private_key": "…" }' : undefined}
+              spellCheck={false} onChange={(e) => setConfig({ ...config, [f.name]: e.target.value })} />
           ) : f.type === 'select' && f.options.length ? (
             <select className="input" value={config[f.name] ?? String(f.default ?? '')} onChange={(e) => setConfig({ ...config, [f.name]: e.target.value })}>
               {!f.required && <option value="">—</option>}
@@ -103,6 +124,8 @@ export default function Destinations() {
   const dests = useAsync(() => api.get<Destination[]>('/destinations'))
   const [modal, setModal] = useState<{ existing?: Destination } | null>(null)
   const typeOf = (t: string) => types.data?.find((x) => x.type === t)
+  const me = useMe()
+  const canAdd = me.brandsWith('destinations.manage').length > 0 || !!me.me?.platform_admin
 
   const remove = async (d: Destination) => {
     if (!confirm(`Remove destination “${d.name}”?`)) return
@@ -112,7 +135,7 @@ export default function Destinations() {
   return (
     <div className="page">
       <PageHead stage="activation" title="Destinations" subtitle="The tools your audiences are delivered to. Credentials are stored securely and never shown again."
-        actions={<button className="btn primary" onClick={() => setModal({})} disabled={!types.data}>+ Add destination</button>} />
+        actions={canAdd ? <button className="btn primary" onClick={() => setModal({})} disabled={!types.data}>+ Add destination</button> : undefined} />
       <ErrorBox error={dests.error || types.error} />
       {dests.loading ? <Spinner label="Loading…" /> : dests.data?.length ? (
         <div className="dest-grid">
@@ -125,7 +148,7 @@ export default function Destinations() {
                   <DestIcon type={d.type} size={48} />
                   <div className="grow">
                     <h2>{d.name}</h2>
-                    <div className="small muted">{t?.label ?? d.type} · {t?.category}</div>
+                    <div className="small muted">{t?.label ?? d.type} · {d.brand_id == null ? 'Shared' : me.brandName(d.brand_id)}</div>
                   </div>
                   {configured ? <span className="badge green"><span className="dot" />Connected</span>
                     : <span className="badge amber"><span className="dot" />Credentials needed</span>}
@@ -142,8 +165,10 @@ export default function Destinations() {
                 <div className="dest-foot">
                   <Link to="/activations" className="small">{d.sync_count ? `${d.sync_count} sync${d.sync_count === 1 ? '' : 's'}` : 'No syncs yet'}</Link>
                   <span className="grow" />
-                  <button className="btn ghost sm danger" onClick={() => remove(d)}>Remove</button>
-                  <button className={`btn sm ${configured ? '' : 'primary'}`} onClick={() => setModal({ existing: d })}>{configured ? 'Edit' : 'Add credentials'}</button>
+                  {me.can('destinations.manage', d.brand_id ?? null) && d.brand_id != null || me.me?.platform_admin ? (<>
+                    <button className="btn ghost sm danger" onClick={() => remove(d)}>Remove</button>
+                    <button className={`btn sm ${configured ? '' : 'primary'}`} onClick={() => setModal({ existing: d })}>{configured ? 'Edit' : 'Add credentials'}</button>
+                  </>) : <span className="small faint">View only</span>}
                 </div>
               </div>
             )
@@ -151,7 +176,7 @@ export default function Destinations() {
         </div>
       ) : (
         <div className="card">
-          <Empty title="No destinations yet" action={<button className="btn primary" onClick={() => setModal({})}>Add destination</button>}>
+          <Empty title="No destinations yet" action={canAdd ? <button className="btn primary" onClick={() => setModal({})}>Add destination</button> : undefined}>
             Connect Sailthru to start delivering audiences.
           </Empty>
         </div>

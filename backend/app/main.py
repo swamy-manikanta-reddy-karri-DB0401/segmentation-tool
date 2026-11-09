@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import re
+from datetime import datetime, timedelta, timezone
 from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi import Body, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import audiences, catalog, config, connection, db, destinations, insights, scheduler, sync_engine
+from . import access, audiences, catalog, config, connection, db, destinations, insights, scheduler, sync_engine
 from .compiler import CompileError, Compiler, source, trait_type
 from .databricks import DatabricksError, client, reset_client
 from .scheduler import ScheduleError
@@ -28,13 +29,14 @@ TRAIT_METHODS = {"aggregation", "count", "occurrence", "list", "sql_aggregation"
 async def lifespan(_: FastAPI):
     db.conn()
     connection.seed()
+    access.seed()
     scheduler.recover_interrupted_runs()
     task = asyncio.create_task(scheduler.loop())
     yield
     task.cancel()
 
 
-app = FastAPI(title="MediaMint CDP", lifespan=lifespan)
+app = FastAPI(title="MediaMint CDP", lifespan=lifespan, dependencies=[Depends(access.bind_user)])
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_methods=["*"], allow_headers=["*"])
 
 
@@ -58,11 +60,29 @@ def _get(table: str, id_: int) -> dict:
     return row
 
 
+def _visible_parents() -> list[dict]:
+    u = access.current()
+    return [p for p in audiences.parents() if u.sees(p.get("brand_id"))]
+
+
 def _pid(value) -> int:
-    pid = int(value or audiences.default_parent_id() or 0)
-    if not pid:
-        raise ValueError("Set up a parent model first")
-    return pid
+    """A parent model the caller may see: the one asked for, else their first visible one."""
+    if value:
+        pid = int(value)
+        access.require_view(access.brand_of_parent(pid))
+        return pid
+    visible = _visible_parents()
+    if not visible:
+        raise ValueError("No parent model available — ask a Platform Admin to set one up for your brand")
+    return visible[0]["id"]
+
+
+def _brand(value) -> int | None:
+    if value in (None, "", 0):
+        return None
+    if not db.one("SELECT id FROM brands WHERE id = ?", (int(value),)):
+        raise ValueError(f"Brand {value} not found")
+    return int(value)
 
 
 # ---- connection & settings ---------------------------------------------------
@@ -95,16 +115,19 @@ def list_connections():
 
 @app.post("/api/connections/warehouses")
 def connection_warehouses(body: dict = Body(...)):
+    access.require("source.manage")
     return connection.list_warehouses(_conn_values(body))
 
 
 @app.post("/api/connections/test")
 def test_connection(body: dict = Body(...)):
+    access.require("source.manage")
     return connection.test(_conn_values(body))
 
 
 @app.post("/api/connections")
 def create_connection(body: dict = Body(...)):
+    access.require("source.manage")
     values = connection.normalize(_conn_values(body))
     result = connection.test(values)
     if not result["ok"]:
@@ -115,6 +138,7 @@ def create_connection(body: dict = Body(...)):
 
 @app.put("/api/connections/{cid}")
 def update_connection(cid: int, body: dict = Body(...)):
+    access.require("source.manage")
     _get("connections", cid)
     values = connection.normalize(_conn_values(body, cid))
     result = connection.test(values)
@@ -128,6 +152,7 @@ def update_connection(cid: int, body: dict = Body(...)):
 
 @app.delete("/api/connections/{cid}")
 def delete_connection(cid: int):
+    access.require("source.manage")
     _get("connections", cid)
     used = db.query("SELECT name FROM models WHERE kind = 'parent' AND connection_id = ?", (cid,))
     if used:
@@ -147,6 +172,7 @@ def get_settings():
 
 @app.put("/api/settings")
 def put_settings(body: dict = Body(...)):
+    access.require("settings.manage")
     if "as_of_date" in body:
         as_of = (body.get("as_of_date") or "").strip()
         if as_of and not DATE_RE.match(as_of):
@@ -187,42 +213,47 @@ def sources():
 
 @app.get("/api/profiles/search")
 def search_profiles(q: str = "", parent_id: int | None = None):
-    return insights.search_profiles(q, parent_id)
+    return insights.search_profiles(q, _pid(parent_id))
 
 
 @app.get("/api/profiles/{profile_id}")
 def get_profile(profile_id: str, parent_id: int | None = None):
-    return insights.profile(profile_id, parent_id)
+    return insights.profile(profile_id, _pid(parent_id))
 
 
 # ---- catalog browsing ----------------------------------------------------------
 
 @app.get("/api/catalog/catalogs")
 def catalogs(connection_id: int | None = None):
+    access.require("schema.manage")
     connection.use(connection_id)
     return catalog.list_catalogs()
 
 
 @app.get("/api/catalog/schemas")
 def schemas(catalog_name: str, connection_id: int | None = None):
+    access.require("schema.manage")
     connection.use(connection_id)
     return catalog.list_schemas(catalog_name)
 
 
 @app.get("/api/catalog/tables")
 def tables(catalog_name: str, schema: str, connection_id: int | None = None):
+    access.require("schema.manage")
     connection.use(connection_id)
     return catalog.list_tables(catalog_name, schema)
 
 
 @app.get("/api/catalog/columns")
 def columns(table: str, connection_id: int | None = None):
+    access.require("schema.manage")
     connection.use(connection_id)
     return catalog.describe(table)
 
 
 @app.get("/api/catalog/preview")
 def preview_table(table: str, connection_id: int | None = None):
+    access.require("schema.manage")
     connection.use(connection_id)
     res = client().execute(f"SELECT * FROM {catalog.quote_table(table)} LIMIT 50")
     return {"columns": res.column_names, "rows": res.rows}
@@ -230,12 +261,14 @@ def preview_table(table: str, connection_id: int | None = None):
 
 @app.post("/api/catalog/describe-sql")
 def describe_sql(body: dict = Body(...)):
+    access.require("schema.manage")
     connection.use(body.get("connection_id"))
     return catalog.describe_sql(body.get("sql", ""))
 
 
 @app.post("/api/catalog/preview-sql")
 def preview_sql(body: dict = Body(...)):
+    access.require("schema.manage")
     connection.use(body.get("connection_id"))
     src = source({"name": "query", "query_type": "sql", "sql": body.get("sql", "")})
     res = client().execute(f"SELECT * FROM {src} LIMIT 20")
@@ -244,19 +277,20 @@ def preview_sql(body: dict = Body(...)):
 
 # ---- schema models (parent / related / event) ----------------------------------
 
-MODEL_FIELDS = ("kind", "connection_id", "name", "description", "table_ref", "query_type", "sql", "primary_key", "label_column",
+MODEL_FIELDS = ("kind", "connection_id", "brand_id", "name", "description", "table_ref", "query_type", "sql", "primary_key", "label_column",
                 "secondary_label", "parent_id", "relationship", "join_keys", "merge_columns", "column_settings",
                 "timestamp_column", "event_name_column")
 
 
 def _validate_model(m: dict) -> dict:
     if m["kind"] == "parent":
+        m["brand_id"] = _brand(m.get("brand_id"))
         m["connection_id"] = int(m.get("connection_id") or 0) or connection.default_id()
         if not m["connection_id"]:
             raise ValueError("Add a Databricks connection on the Sources page first")
         connection.use(m["connection_id"])
     else:
-        m["connection_id"] = None
+        m["connection_id"] = m["brand_id"] = None  # related/event models follow their parent
         connection.use_parent(m.get("parent_id"))
     if m.get("query_type") == "sql":
         cols = catalog.describe_sql(m.get("sql") or "")
@@ -306,19 +340,23 @@ def _validate_model(m: dict) -> dict:
 
 @app.get("/api/parents")
 def list_parents():
-    return audiences.parents()
+    return _visible_parents()
 
 
 @app.get("/api/models")
 def list_models():
-    return db.query("SELECT * FROM models ORDER BY kind = 'parent' DESC, id")
+    u = access.current()
+    return [m for m in db.query("SELECT * FROM models ORDER BY kind = 'parent' DESC, id")
+            if u.sees(access.brand_of_model(m["id"]))]
 
 
 @app.get("/api/schema")
 def get_schema(parent_id: int | None = None):
-    s = audiences.load_schema(parent_id)
+    if not _visible_parents():
+        return {"parent": None, "models": [], "traits": [], "virtual_columns": [], "parents": []}
+    s = audiences.load_schema(_pid(parent_id))
     if not s["parent"]:
-        return {"parent": None, "models": [], "traits": [], "virtual_columns": [], "parents": audiences.parents()}
+        return {"parent": None, "models": [], "traits": [], "virtual_columns": [], "parents": _visible_parents()}
     comp = Compiler(s)
     virtual = []
     for t in s["traits"].values():
@@ -334,11 +372,12 @@ def get_schema(parent_id: int | None = None):
             virtual.append({"name": f"merged.{mid}.{col}", "label": f"{m['name']} → {col}",
                             "group": f"Merged from {m['name']}", "type": info["type"], "description": ""})
     return {"parent": s["parent"], "models": list(s["models"].values()), "traits": list(s["traits"].values()),
-            "virtual_columns": virtual, "parents": audiences.parents()}
+            "virtual_columns": virtual, "parents": _visible_parents()}
 
 
 @app.post("/api/models")
 def create_model(body: dict = Body(...)):
+    access.require("schema.manage")
     m = {k: body.get(k) for k in MODEL_FIELDS}
     if m["kind"] not in ("parent", "related", "event"):
         raise ValueError("kind must be parent, related or event")
@@ -351,6 +390,7 @@ def create_model(body: dict = Body(...)):
 
 @app.put("/api/models/{model_id}")
 def update_model(model_id: int, body: dict = Body(...)):
+    access.require("schema.manage")
     current = _get("models", model_id)
     m = {k: body[k] if k in body else current.get(k) for k in MODEL_FIELDS}
     m["kind"] = current["kind"]
@@ -362,6 +402,7 @@ def update_model(model_id: int, body: dict = Body(...)):
 
 @app.delete("/api/models/{model_id}")
 def delete_model(model_id: int):
+    access.require("schema.manage")
     m = _get("models", model_id)
     if m["kind"] == "parent" and db.one("SELECT id FROM audiences WHERE parent_id = ?", (model_id,)):
         raise ValueError("Audiences are built on this parent model. Delete them first.")
@@ -372,6 +413,7 @@ def delete_model(model_id: int):
 @app.get("/api/models/{model_id}/values")
 def model_values(model_id: int, column: str, q: str = ""):
     m = _get("models", model_id)
+    access.require_view(access.brand_of_model(model_id))
     connection.use_model(model_id)
     settings = (m.get("column_settings") or {}).get(column) or {}
     if settings.get("suggestions") is False or settings.get("privacy") in ("redacted", "blocked", "sync_only"):
@@ -400,6 +442,7 @@ def list_traits(parent_id: int | None = None):
 @app.post("/api/traits")
 def create_trait(body: dict = Body(...)):
     pid = _pid(body.get("parent_id"))
+    access.require("traits.manage", access.brand_of_parent(pid))
     values = _validate_trait(body, pid)
     ts = db.now()
     return _get("traits", db.insert("traits", {**values, "parent_id": pid, "created_at": ts, "updated_at": ts}))
@@ -408,36 +451,43 @@ def create_trait(body: dict = Body(...)):
 @app.put("/api/traits/{trait_id}")
 def update_trait(trait_id: int, body: dict = Body(...)):
     t = _get("traits", trait_id)
+    access.require("traits.manage", access.brand_of_parent(t["parent_id"]))
     db.update("traits", trait_id, {**_validate_trait({**t, **body}, t["parent_id"]), "updated_at": db.now()})
     return _get("traits", trait_id)
 
 
 @app.delete("/api/traits/{trait_id}")
 def delete_trait(trait_id: int):
-    _get("traits", trait_id)
+    access.require("traits.manage", access.brand_of_parent(_get("traits", trait_id)["parent_id"]))
     db.delete("traits", trait_id)
     return {"ok": True}
 
 
 @app.post("/api/traits/preview")
 def preview_trait(body: dict = Body(...)):
-    return audiences.trait_preview(body.get("method"), body.get("config") or {}, body.get("parent_id"))
+    return audiences.trait_preview(body.get("method"), body.get("config") or {}, _pid(body.get("parent_id")))
 
 
 # ---- audiences ------------------------------------------------------------------
 
 @app.get("/api/audiences")
 def list_audiences(parent_id: int | None = None):
-    sql = ("SELECT a.*, m.name AS parent_name, (SELECT COUNT(*) FROM syncs s WHERE s.audience_id = a.id) AS sync_count "
+    sql = ("SELECT a.*, m.name AS parent_name, m.brand_id AS brand_id, "
+           "(SELECT COUNT(*) FROM syncs s WHERE s.audience_id = a.id) AS sync_count "
            "FROM audiences a LEFT JOIN models m ON m.id = a.parent_id")
     if parent_id:
-        return db.query(sql + " WHERE a.parent_id = ? ORDER BY a.updated_at DESC", (parent_id,))
-    return db.query(sql + " ORDER BY a.updated_at DESC")
+        rows = db.query(sql + " WHERE a.parent_id = ? ORDER BY a.updated_at DESC", (parent_id,))
+    else:
+        rows = db.query(sql + " ORDER BY a.updated_at DESC")
+    u = access.current()
+    return [r for r in rows if u.sees(r["brand_id"])]
 
 
 @app.get("/api/audiences/{audience_id}")
 def get_audience(audience_id: int):
-    return _get("audiences", audience_id)
+    a = _get("audiences", audience_id)
+    access.require_view(access.brand_of_parent(a["parent_id"]))
+    return a
 
 
 def _validate_splits(splits: dict | None) -> dict:
@@ -457,18 +507,22 @@ def create_audience(body: dict = Body(...)):
     if not (body.get("name") or "").strip():
         raise ValueError("Give the audience a name")
     pid = _pid(body.get("parent_id"))
+    access.require("audiences.edit", access.brand_of_parent(pid))
     audiences.compile_definition(body.get("definition") or {}, parent_id=pid)  # validate
     ts = db.now()
     id_ = db.insert("audiences", {"name": body["name"].strip(), "description": body.get("description", ""), "parent_id": pid,
                                   "definition": body.get("definition") or {}, "splits": _validate_splits(body.get("splits")),
                                   "created_at": ts, "updated_at": ts, "last_size": body.get("last_size"),
-                                  "size_updated_at": ts if body.get("last_size") is not None else None})
+                                  "size_updated_at": ts if body.get("last_size") is not None else None,
+                                  "created_by": access.current().email})
+    access.audit("create", "audience", id_, access.brand_of_parent(pid), name=body["name"].strip())
     return _get("audiences", id_)
 
 
 @app.put("/api/audiences/{audience_id}")
 def update_audience(audience_id: int, body: dict = Body(...)):
     a = _get("audiences", audience_id)
+    access.require("audiences.edit", access.brand_of_parent(a["parent_id"]))
     values = {k: body[k] for k in ("name", "description", "definition") if k in body}
     if "definition" in values:
         audiences.compile_definition(values["definition"], parent_id=a["parent_id"])
@@ -483,6 +537,7 @@ def update_audience(audience_id: int, body: dict = Body(...)):
 
 @app.delete("/api/audiences/{audience_id}")
 def delete_audience(audience_id: int):
+    access.require("audiences.edit", access.brand_of_audience(audience_id))
     if db.one("SELECT id FROM syncs WHERE audience_id = ?", (audience_id,)):
         raise ValueError("This audience has syncs. Delete them first.")
     db.delete("audiences", audience_id)
@@ -491,35 +546,36 @@ def delete_audience(audience_id: int):
 
 @app.post("/api/audiences/compile")
 def compile_audience(body: dict = Body(...)):
-    c = audiences.compile_definition(body.get("definition") or {}, parent_id=body.get("parent_id"))
+    c = audiences.compile_definition(body.get("definition") or {}, parent_id=_pid(body.get("parent_id")))
     return {"sql": c.sql, "params": c.params}
 
 
 @app.post("/api/audiences/calculate")
 def calculate(body: dict = Body(...)):
-    return audiences.calculate(body.get("definition") or {}, body.get("parent_id"))
+    return audiences.calculate(body.get("definition") or {}, _pid(body.get("parent_id")))
 
 
 @app.post("/api/audiences/breakdown")
 def breakdown(body: dict = Body(...)):
-    return audiences.breakdown(body.get("definition") or {}, body.get("column"), body.get("parent_id"),
+    return audiences.breakdown(body.get("definition") or {}, body.get("column"), _pid(body.get("parent_id")),
                                body.get("source", "property"), body.get("model_id"), body.get("metric", "users"))
 
 
 @app.post("/api/audiences/overlap")
 def overlap(body: dict = Body(...)):
-    return audiences.overlap(body.get("definition") or {}, int(body["audience_id"]), body.get("parent_id"))
+    access.require_view(access.brand_of_audience(int(body["audience_id"])))
+    return audiences.overlap(body.get("definition") or {}, int(body["audience_id"]), _pid(body.get("parent_id")))
 
 
 @app.post("/api/audiences/preview")
 def preview(body: dict = Body(...)):
-    return audiences.preview(body.get("definition") or {}, body.get("parent_id"))
+    return audiences.preview(body.get("definition") or {}, _pid(body.get("parent_id")))
 
 
 # ---- destinations ------------------------------------------------------------------
 
 def _secret_fields(type_: str) -> set[str]:
-    return {f.name for f in destinations.get(type_).config_fields if f.type == "password"}
+    return {f.name for f in destinations.get(type_).config_fields if f.type == "password" or f.secret}
 
 
 def _mask(dest: dict) -> dict:
@@ -543,22 +599,27 @@ def destination_types():
 def list_destinations():
     rows = db.query("SELECT d.*, (SELECT COUNT(*) FROM syncs s WHERE s.destination_id = d.id) AS sync_count "
                     "FROM destinations d ORDER BY id DESC")
-    return [_mask(r) for r in rows]
+    u = access.current()
+    return [_mask(r) for r in rows if u.sees(r["brand_id"])]
 
 
 @app.post("/api/destinations")
 def create_destination(body: dict = Body(...)):
     destinations.get(body.get("type"))
+    brand_id = _brand(body.get("brand_id"))
+    access.require("destinations.manage", brand_id)
     if not (body.get("name") or "").strip():
         raise ValueError("Give the destination a name")
-    id_ = db.insert("destinations", {"name": body["name"].strip(), "type": body["type"],
+    id_ = db.insert("destinations", {"name": body["name"].strip(), "type": body["type"], "brand_id": brand_id,
                                      "config": body.get("config") or {}, "created_at": db.now()})
+    access.audit("create", "destination", id_, brand_id, name=body["name"].strip())
     return _mask(_get("destinations", id_))
 
 
 @app.put("/api/destinations/{dest_id}")
 def update_destination(dest_id: int, body: dict = Body(...)):
     current = _get("destinations", dest_id)
+    access.require("destinations.manage", current["brand_id"])
     values = {}
     if "name" in body:
         values["name"] = body["name"]
@@ -570,17 +631,37 @@ def update_destination(dest_id: int, body: dict = Body(...)):
 
 @app.delete("/api/destinations/{dest_id}")
 def delete_destination(dest_id: int):
+    access.require("destinations.manage", access.brand_of_destination(dest_id))
     if db.one("SELECT id FROM syncs WHERE destination_id = ?", (dest_id,)):
         raise ValueError("This destination is used by syncs. Delete them first.")
     db.delete("destinations", dest_id)
     return {"ok": True}
 
 
+@app.post("/api/destinations/{dest_id}/segments")
+def create_destination_segment(dest_id: int, body: dict = Body(...)):
+    """Create an audience segment in an ad platform (Google Ad Manager) and return its ID."""
+    d = _get("destinations", dest_id)
+    access.require("syncs.edit", d["brand_id"])
+    cls = destinations.get(d["type"])
+    if not hasattr(cls, "create_segment"):
+        raise ValueError(f"{cls.label} doesn't support creating segments")
+    dest = cls(d["config"])
+    try:
+        return dest.create_segment(body.get("name", ""), body.get("membership_days"))
+    finally:
+        dest.close()
+
+
 @app.post("/api/destinations/test")
 def test_destination(body: dict = Body(...)):
     cfg = body.get("config") or {}
     if body.get("id"):
-        cfg = _merge_secrets(cfg, _get("destinations", body["id"])["config"])
+        stored = _get("destinations", body["id"])
+        access.require("destinations.manage", stored["brand_id"])
+        cfg = _merge_secrets(cfg, stored["config"])
+    else:
+        access.require("destinations.manage", _brand(body.get("brand_id")))
     dest = destinations.get(body["type"])(cfg)
     try:
         return {"ok": True, "message": dest.test()}
@@ -596,13 +677,14 @@ def test_destination(body: dict = Body(...)):
 def list_rules(parent_id: int | None = None):
     sql = ("SELECT r.*, d.name AS destination_name, d.type AS destination_type FROM destination_rules r "
            "JOIN destinations d ON d.id = r.destination_id")
-    if parent_id:
-        return db.query(sql + " WHERE r.parent_id = ? ORDER BY r.id", (parent_id,))
-    return db.query(sql + " ORDER BY r.id")
+    rows = db.query(sql + " WHERE r.parent_id = ? ORDER BY r.id", (parent_id,)) if parent_id else db.query(sql + " ORDER BY r.id")
+    u = access.current()
+    return [r for r in rows if u.sees(access.brand_of_parent(r["parent_id"]))]
 
 
 def _rule_values(body: dict) -> dict:
     pid = _pid(body.get("parent_id"))
+    access.require("governance.manage", access.brand_of_parent(pid))
     _get("destinations", int(body["destination_id"]))
     definition = body.get("definition") or {"type": "group", "op": "and", "conditions": []}
     if not definition.get("conditions"):
@@ -626,6 +708,7 @@ def update_rule(rule_id: int, body: dict = Body(...)):
 
 @app.delete("/api/destination-rules/{rule_id}")
 def delete_rule(rule_id: int):
+    access.require("governance.manage", access.brand_of_parent(_get("destination_rules", rule_id)["parent_id"]))
     db.delete("destination_rules", rule_id)
     return {"ok": True}
 
@@ -643,11 +726,13 @@ def preview_rule(body: dict = Body(...)):
 
 @app.get("/api/priority-lists")
 def list_priority_lists():
-    return db.query("SELECT * FROM priority_lists ORDER BY id")
+    u = access.current()
+    return [p for p in db.query("SELECT * FROM priority_lists ORDER BY id") if u.sees(access.brand_of_parent(p["parent_id"]))]
 
 
 def _priority_values(body: dict, list_id: int | None = None) -> dict:
     pid = _pid(body.get("parent_id"))
+    access.require("governance.manage", access.brand_of_parent(pid))
     ids = [int(x) for x in (body.get("config") or {}).get("audience_ids", [])]
     if len(set(ids)) != len(ids):
         raise ValueError("An audience can only appear once in a list")
@@ -675,6 +760,7 @@ def update_priority_list(list_id: int, body: dict = Body(...)):
 
 @app.delete("/api/priority-lists/{list_id}")
 def delete_priority_list(list_id: int):
+    access.require("governance.manage", access.brand_of_parent(_get("priority_lists", list_id)["parent_id"]))
     db.delete("priority_lists", list_id)
     return {"ok": True}
 
@@ -683,14 +769,16 @@ def delete_priority_list(list_id: int):
 
 @app.get("/api/sync-templates")
 def list_templates(destination_id: int | None = None):
-    if destination_id:
-        return db.query("SELECT * FROM sync_templates WHERE destination_id = ? ORDER BY name", (destination_id,))
-    return db.query("SELECT * FROM sync_templates ORDER BY name")
+    rows = (db.query("SELECT * FROM sync_templates WHERE destination_id = ? ORDER BY name", (destination_id,)) if destination_id
+            else db.query("SELECT * FROM sync_templates ORDER BY name"))
+    u = access.current()
+    return [t for t in rows if u.sees(access.brand_of_destination(t["destination_id"]))]
 
 
 @app.post("/api/sync-templates")
 def create_template(body: dict = Body(...)):
     dest = _get("destinations", int(body["destination_id"]))
+    access.require("syncs.edit", dest["brand_id"])
     cfg = sync_engine.normalize_config(body.get("config") or {}, destinations.get(dest["type"]))
     name = (body.get("name") or "").strip()
     if not name:
@@ -701,6 +789,7 @@ def create_template(body: dict = Body(...)):
 
 @app.delete("/api/sync-templates/{template_id}")
 def delete_template(template_id: int):
+    access.require("syncs.edit", access.brand_of_destination(_get("sync_templates", template_id)["destination_id"]))
     db.delete("sync_templates", template_id)
     return {"ok": True}
 
@@ -709,8 +798,10 @@ def delete_template(template_id: int):
 
 SYNC_LIST_SQL = """
 SELECT s.*, a.name AS audience_name, a.parent_id AS parent_id, d.name AS destination_name, d.type AS destination_type,
+  m.brand_id AS brand_id,
   (SELECT status FROM sync_runs r WHERE r.sync_id = s.id ORDER BY r.id DESC LIMIT 1) AS last_status
 FROM syncs s JOIN audiences a ON a.id = s.audience_id JOIN destinations d ON d.id = s.destination_id
+LEFT JOIN models m ON m.id = a.parent_id
 """
 
 
@@ -718,6 +809,9 @@ def _sync_out(s: dict) -> dict:
     s["running"] = sync_engine.is_running(s["id"])
     s["destination_configured"] = insights.destination_configured(s["destination_id"])
     s["config"] = sync_engine.normalize_config(s["config"], destinations.get(s["destination_type"]))
+    u = access.current()
+    s["can"] = {"edit": u.can("syncs.edit", s["brand_id"]), "approve": u.can("syncs.approve", s["brand_id"]),
+                "run": u.can("syncs.run", s["brand_id"], s["destination_id"])}
     return s
 
 
@@ -727,7 +821,8 @@ def list_syncs(audience_id: int | None = None):
         rows = db.query(SYNC_LIST_SQL + " WHERE s.audience_id = ? ORDER BY s.id DESC", (audience_id,))
     else:
         rows = db.query(SYNC_LIST_SQL + " ORDER BY s.id DESC")
-    return [_sync_out(r) for r in rows]
+    u = access.current()
+    return [_sync_out(r) for r in rows if u.sees(r["brand_id"])]
 
 
 @app.get("/api/syncs/{sync_id}")
@@ -735,12 +830,17 @@ def get_sync(sync_id: int):
     row = db.one(SYNC_LIST_SQL + " WHERE s.id = ?", (sync_id,))
     if not row:
         raise HTTPException(404, "Sync not found")
+    access.require_view(row["brand_id"])
     return _sync_out(row)
 
 
 def _validate_sync(body: dict) -> dict:
     audience = _get("audiences", int(body["audience_id"]))
     dest = _get("destinations", int(body["destination_id"]))
+    brand_id = access.brand_of_parent(audience["parent_id"])
+    access.require("syncs.edit", brand_id)
+    if dest["brand_id"] is not None and dest["brand_id"] != brand_id:
+        raise ValueError(f"{dest['name']} belongs to another brand")
     cfg = sync_engine.validate_config(body.get("config") or {}, destinations.get(dest["type"]),
                                       audiences.load_schema(audience["parent_id"]))
     group = cfg.get("split_group")
@@ -753,26 +853,73 @@ def _validate_sync(body: dict) -> dict:
             "schedule": scheduler.validate(body.get("schedule")), "enabled": 1 if body.get("enabled", True) else 0}
 
 
+def _approval(brand_id: int | None) -> dict:
+    """Maker-checker: approvers publish directly; everyone else's changes wait for an approver."""
+    u = access.current()
+    if u.can("syncs.approve", brand_id):
+        return {"approval_status": "approved", "approved_by": u.email, "approved_at": db.now(), "submitted_by": u.email}
+    return {"approval_status": "pending", "approved_by": "", "approved_at": None, "submitted_by": u.email}
+
+
 @app.post("/api/syncs")
 def create_sync(body: dict = Body(...)):
     values = _validate_sync(body)
-    values["created_at"] = db.now()
+    brand_id = access.brand_of_audience(values["audience_id"])
+    values.update(created_at=db.now(), created_by=access.current().email, review_note="", **_approval(brand_id))
     sync_id = db.insert("syncs", values)
     scheduler.refresh_next(sync_id)
+    access.audit("create", "sync", sync_id, brand_id, name=values["name"], approval=values["approval_status"])
+    return get_sync(sync_id)
+
+
+@app.post("/api/syncs/{sync_id}/approve")
+def approve_sync(sync_id: int, body: dict = Body(default={})):
+    s = _get("syncs", sync_id)
+    brand_id = access.brand_of_sync(sync_id)
+    u = access.require("syncs.approve", brand_id)
+    db.update("syncs", sync_id, {"approval_status": "approved", "approved_by": u.email, "approved_at": db.now(),
+                                 "review_note": (body.get("note") or "").strip()})
+    scheduler.refresh_next(sync_id)
+    access.audit("approve", "sync", sync_id, brand_id, name=s["name"], note=body.get("note") or "")
+    return get_sync(sync_id)
+
+
+@app.post("/api/syncs/{sync_id}/reject")
+def reject_sync(sync_id: int, body: dict = Body(default={})):
+    s = _get("syncs", sync_id)
+    brand_id = access.brand_of_sync(sync_id)
+    u = access.require("syncs.approve", brand_id)
+    note = (body.get("note") or "").strip()
+    if not note:
+        raise ValueError("Say why the sync is sent back, so the builder knows what to change")
+    db.update("syncs", sync_id, {"approval_status": "rejected", "approved_by": u.email, "approved_at": db.now(), "review_note": note})
+    access.audit("reject", "sync", sync_id, brand_id, name=s["name"], note=note)
     return get_sync(sync_id)
 
 
 @app.put("/api/syncs/{sync_id}")
 def update_sync(sync_id: int, body: dict = Body(...)):
     current = _get("syncs", sync_id)
-    db.update("syncs", sync_id, _validate_sync({**current, **body}))
+    brand_id = access.brand_of_sync(sync_id)
+    if set(body) <= {"enabled"}:  # pausing / resuming is operational, not a configuration change
+        u = access.current()
+        if not (u.can("syncs.edit", brand_id) or u.can("syncs.run", brand_id, current["destination_id"])):
+            raise HTTPException(403, "Your role can't pause or resume this sync")
+        db.update("syncs", sync_id, {"enabled": bool(body["enabled"])})
+        access.audit("resume" if body["enabled"] else "pause", "sync", sync_id, brand_id, name=current["name"])
+    else:
+        values = _validate_sync({**current, **body})
+        values.update(_approval(brand_id))
+        db.update("syncs", sync_id, values)
+        access.audit("update", "sync", sync_id, brand_id, name=values["name"], approval=values["approval_status"])
     scheduler.refresh_next(sync_id)
     return get_sync(sync_id)
 
 
 @app.delete("/api/syncs/{sync_id}")
 def delete_sync(sync_id: int):
-    _get("syncs", sync_id)
+    s = _get("syncs", sync_id)
+    access.require("syncs.edit", access.brand_of_sync(sync_id))
     if sync_engine.is_running(sync_id):
         raise ValueError("Wait for the current run to finish")
     try:
@@ -780,35 +927,46 @@ def delete_sync(sync_id: int):
     except DatabricksError:
         pass  # best effort — app record is removed regardless
     db.delete("syncs", sync_id)
+    access.audit("delete", "sync", sync_id, None, name=s["name"])
     return {"ok": True}
 
 
 @app.post("/api/syncs/{sync_id}/run")
 def run_sync(sync_id: int, body: dict = Body(default={})):
     sync = _get("syncs", sync_id)
+    brand_id = access.brand_of_sync(sync_id)
+    access.require("syncs.run", brand_id, sync["destination_id"])
+    if sync["approval_status"] != "approved":
+        raise ValueError("This sync is waiting for approval by a Brand Marketing Admin")
     dest = _get("destinations", sync["destination_id"])
     missing = insights.missing_fields(dest)
     if missing:
         raise ValueError(f"Add {', '.join(missing)} to the {dest['name']} destination before running this sync")
+    access.audit("run", "sync", sync_id, brand_id, name=sync["name"], full_resync=bool(body.get("full_resync")))
     return {"run_id": sync_engine.start_run(sync_id, "manual", bool(body.get("full_resync")))}
 
 
 @app.get("/api/syncs/{sync_id}/runs")
 def sync_runs(sync_id: int):
+    access.require_view(access.brand_of_sync(sync_id))
     return db.query("SELECT id, sync_id, status, trigger, started_at, finished_at, audience_rows, added, changed, "
                     "removed, failed, error FROM sync_runs WHERE sync_id = ? ORDER BY id DESC LIMIT 50", (sync_id,))
 
 
 @app.get("/api/runs/recent")
 def recent_runs():
-    return db.query("SELECT r.id, r.sync_id, r.status, r.trigger, r.started_at, r.finished_at, r.added, r.changed, "
+    u = access.current()
+    rows = db.query("SELECT r.id, r.sync_id, r.status, r.trigger, r.started_at, r.finished_at, r.added, r.changed, "
                     "r.removed, r.failed, s.name AS sync_name FROM sync_runs r JOIN syncs s ON s.id = r.sync_id "
-                    "ORDER BY r.id DESC LIMIT 15")
+                    "ORDER BY r.id DESC LIMIT 50")
+    return [r for r in rows if u.sees(access.brand_of_sync(r["sync_id"]))][:15]
 
 
 @app.get("/api/runs/{run_id}")
 def get_run(run_id: int):
-    return _get("sync_runs", run_id)
+    run = _get("sync_runs", run_id)
+    access.require_view(access.brand_of_sync(run["sync_id"]))
+    return run
 
 
 # ---- dashboard -----------------------------------------------------------------------
@@ -821,10 +979,132 @@ def dashboard():
         "destinations": count("destinations"),
         "syncs": count("syncs"),
         "traits": count("traits"),
-        "runs_24h": db.one("SELECT COUNT(*) AS n FROM sync_runs WHERE started_at >= datetime('now', '-1 day')")["n"],
+        "runs_24h": db.one("SELECT COUNT(*) AS n FROM sync_runs WHERE started_at >= ?",
+                           ((datetime.now(timezone.utc) - timedelta(days=1)).isoformat(timespec="seconds"),))["n"],
         "rows_synced": db.one("SELECT COALESCE(SUM(added + changed + removed), 0) AS n FROM sync_runs")["n"],
         "schema_ready": db.one("SELECT id FROM models WHERE kind = 'parent'") is not None,
     }
+
+
+# ---- access control: me, brands, roles --------------------------------------------------------
+
+def _brands_out() -> list[dict]:
+    u = access.current()
+    rows = db.query("SELECT b.*, (SELECT COUNT(*) FROM models m WHERE m.brand_id = b.id AND m.kind = 'parent') AS parent_count, "
+                    "(SELECT COUNT(*) FROM destinations d WHERE d.brand_id = b.id) AS destination_count FROM brands b ORDER BY name")
+    return [b for b in rows if u.sees(b["id"])]
+
+
+@app.get("/api/me")
+def me():
+    u = access.current()
+    brands = _brands_out()
+    perms = sorted(access.ALL_BRAND_PERMS)
+    return {"email": u.email, "name": u.name, "groups": u.groups, "platform_admin": u.platform_admin,
+            "roles": [{"role": b.role, "label": access.ROLES[b.role]["label"], "brand_id": b.brand_id,
+                       "destination_ids": b.destination_ids} for b in u.bindings],
+            "platform": {p: u.can(p) for p in sorted(access.PLATFORM_PERMS)},
+            "brands": [{"id": b["id"], "name": b["name"], "can": {p: u.can(p, b["id"]) for p in perms}} for b in brands],
+            "in_databricks_app": access.IN_DATABRICKS_APP}
+
+
+@app.get("/api/roles")
+def list_roles():
+    return [{"role": k, **v, "permissions": sorted(access.BRAND_PERMS.get(k, access.ALL_BRAND_PERMS | access.PLATFORM_PERMS))}
+            for k, v in access.ROLES.items()]
+
+
+@app.get("/api/brands")
+def list_brands():
+    return _brands_out()
+
+
+@app.post("/api/brands")
+def create_brand(body: dict = Body(...)):
+    access.require("access.manage")
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise ValueError("Give the brand a name")
+    if db.one("SELECT id FROM brands WHERE lower(name) = lower(?)", (name,)):
+        raise ValueError(f"A brand called {name} already exists")
+    bid = db.insert("brands", {"name": name, "description": body.get("description", ""), "created_at": db.now()})
+    access.audit("create", "brand", bid, bid, name=name)
+    return _get("brands", bid)
+
+
+@app.put("/api/brands/{brand_id}")
+def update_brand(brand_id: int, body: dict = Body(...)):
+    access.require("access.manage")
+    _get("brands", brand_id)
+    values = {k: (body[k] or "").strip() for k in ("name", "description") if k in body}
+    if "name" in values and not values["name"]:
+        raise ValueError("Give the brand a name")
+    db.update("brands", brand_id, values)
+    return _get("brands", brand_id)
+
+
+@app.delete("/api/brands/{brand_id}")
+def delete_brand(brand_id: int):
+    access.require("access.manage")
+    b = _get("brands", brand_id)
+    if db.one("SELECT id FROM models WHERE brand_id = ?", (brand_id,)) or db.one("SELECT id FROM destinations WHERE brand_id = ?", (brand_id,)):
+        raise ValueError(f"{b['name']} still has parent models or destinations. Move or delete them first.")
+    db.delete("brands", brand_id)
+    access.audit("delete", "brand", brand_id, None, name=b["name"])
+    return {"ok": True}
+
+
+@app.get("/api/role-bindings")
+def list_role_bindings():
+    access.require("access.manage")
+    return db.query("SELECT r.*, b.name AS brand_name FROM role_bindings r LEFT JOIN brands b ON b.id = r.brand_id "
+                    "ORDER BY b.name, r.role, r.principal")
+
+
+@app.post("/api/role-bindings")
+def create_role_binding(body: dict = Body(...)):
+    access.require("access.manage")
+    role = body.get("role")
+    if role not in access.ROLES:
+        raise ValueError("Choose a role")
+    ptype = body.get("principal_type")
+    principal = (body.get("principal") or "").strip()
+    if ptype not in ("user", "group") or not principal:
+        raise ValueError("Choose a Databricks user (email) or group name")
+    brand_id = None if role == "platform_admin" else _brand(body.get("brand_id"))
+    dest_ids = [int(x) for x in body.get("destination_ids") or []] if role == "operator" else []
+    for d in dest_ids:
+        if access.brand_of_destination(d) not in (None, brand_id) and brand_id is not None:
+            raise ValueError("Operators can only be limited to destinations of the same brand")
+    rid = db.insert("role_bindings", {"principal_type": ptype, "principal": principal.lower() if ptype == "user" else principal,
+                                      "role": role, "brand_id": brand_id, "destination_ids": dest_ids,
+                                      "created_by": access.current().email, "created_at": db.now()})
+    access.audit("grant", "role", rid, brand_id, principal=principal, role=role)
+    return _get("role_bindings", rid)
+
+
+@app.delete("/api/role-bindings/{binding_id}")
+def delete_role_binding(binding_id: int):
+    access.require("access.manage")
+    r = _get("role_bindings", binding_id)
+    db.delete("role_bindings", binding_id)
+    access.audit("revoke", "role", binding_id, r["brand_id"], principal=r["principal"], role=r["role"])
+    return {"ok": True}
+
+
+@app.get("/api/audit")
+def audit_log(limit: int = 100):
+    u = access.current()
+    rows = db.query("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (min(int(limit), 500),))
+    return [r for r in rows if u.platform_admin or (r["brand_id"] is not None and u.can("syncs.approve", r["brand_id"]))]
+
+
+@app.get("/api/dev/personas")
+def dev_personas():
+    """Local development only: users with role grants, to preview the app as them."""
+    if access.IN_DATABRICKS_APP:
+        raise HTTPException(404, "Not available")
+    return sorted({r["principal"] for r in db.query("SELECT principal FROM role_bindings WHERE principal_type = 'user'")})
 
 
 # ---- built-in test inbox (a webhook receiver for demos) ---------------------------------

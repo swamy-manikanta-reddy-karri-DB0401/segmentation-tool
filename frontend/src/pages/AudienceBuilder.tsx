@@ -4,6 +4,7 @@ import { api, fmt } from '../api'
 import type { Audience, Calculation, Destination, GroupNode, Schema, Splits, Sync } from '../api'
 import { BuilderProvider, filterColumns, GroupEditor, migrateDefinition } from '../components/builder/ConditionEditor'
 import { Empty, ErrorBox, Spinner, StatusBadge, Toggle, useAsync } from '../components/ui'
+import { useMe } from '../components/me'
 
 const EMPTY: GroupNode = { type: 'group', op: 'and', conditions: [] }
 type Bar = { value: string | null; count: number }
@@ -140,6 +141,7 @@ export default function AudienceBuilder() {
   const { id } = useParams()
   const [params] = useSearchParams()
   const isNew = id === 'new'
+  const me = useMe()
   const nav = useNavigate()
   const [parentId, setParentId] = useState<number | null>(params.get('parent') ? Number(params.get('parent')) : null)
   const schema = useAsync(() => (isNew || parentId ? api.get<Schema>(`/schema${parentId ? `?parent_id=${parentId}` : ''}`) : Promise.resolve(undefined)), [parentId])
@@ -247,6 +249,9 @@ export default function AudienceBuilder() {
   }
   const parent = schema.data.parent
   const parents = schema.data.parents
+  const brandId = parent.brand_id ?? null
+  const canEdit = me.can('audiences.edit', brandId)
+  const canSync = me.can('syncs.edit', brandId)
 
   return (
     <BuilderProvider value={{ schema: schema.data, audiences: audiences.data ?? [], currentAudienceId: isNew ? undefined : Number(id), steps: calc?.steps }}>
@@ -259,10 +264,11 @@ export default function AudienceBuilder() {
               value={description} onChange={(e) => { setDescription(e.target.value); setDirty(true) }} />
           </div>
           <div className="row">
-            {!isNew && <button className="btn ghost danger" onClick={remove}>Delete</button>}
-            {!isNew && <button className="btn ghost" onClick={copy}>Make a copy</button>}
-            {!isNew && <Link to={`/activations/new?audience=${id}`} className="btn">Add sync</Link>}
-            <button className="btn primary" onClick={save} disabled={saving || (!dirty && !isNew)}>{saving ? 'Saving…' : isNew ? 'Save audience' : dirty ? 'Save changes' : 'Saved'}</button>
+            {!canEdit && <span className="badge" title="Your role can explore this audience but not change it">View only</span>}
+            {!isNew && canEdit && <button className="btn ghost danger" onClick={remove}>Delete</button>}
+            {!isNew && canEdit && <button className="btn ghost" onClick={copy}>Make a copy</button>}
+            {!isNew && canSync && <Link to={`/activations/new?audience=${id}`} className="btn">Add sync</Link>}
+            {canEdit && <button className="btn primary" onClick={save} disabled={saving || (!dirty && !isNew)}>{saving ? 'Saving…' : isNew ? 'Save audience' : dirty ? 'Save changes' : 'Saved'}</button>}
           </div>
         </div>
         <ErrorBox error={loadError || saveError} />

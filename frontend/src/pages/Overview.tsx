@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import { api, fmt } from '../api'
 import type { Overview as OverviewData, SyncRun } from '../api'
 import { ErrorBox, StatusBadge, useAsync } from '../components/ui'
+import { useMe } from '../components/me'
 
 type Status = 'ready' | 'attention' | 'empty'
 interface StageCard {
@@ -53,6 +54,9 @@ function stages(o: OverviewData): StageCard[] {
 const STATUS_LABEL: Record<Status, string> = { ready: 'Ready', attention: 'Needs attention', empty: 'Not started' }
 
 export default function Overview() {
+  const me = useMe()
+  const canManageDest = me.can('destinations.manage')
+  const canBuild = me.can('audiences.edit')
   const overview = useAsync(() => api.get<OverviewData>('/overview'))
   const runs = useAsync(() => api.get<SyncRun[]>('/runs/recent'))
   const o = overview.data
@@ -68,7 +72,7 @@ export default function Overview() {
             <p className="hero-sub">Model customers directly in Databricks, build audiences without SQL, and keep every destination in sync — no data copied.</p>
           </div>
           <div className="hero-actions">
-            <Link to="/audiences/new" className="btn primary">+ New audience</Link>
+            {canBuild && <Link to="/audiences/new" className="btn primary">+ New audience</Link>}
             <Link to="/profiles" className="btn hero-btn">Explore profiles</Link>
           </div>
         </div>
@@ -103,7 +107,7 @@ export default function Overview() {
             <strong>{o.activation.unconfigured.map((d) => d.name).join(', ')} {o.activation.unconfigured.length === 1 ? 'is' : 'are'} waiting for credentials</strong>
             <div className="small muted">Syncs are configured and ready. Add the API key and secret to start delivering audiences.</div>
           </div>
-          <Link to="/destinations" className="btn sm">Add credentials</Link>
+          {canManageDest && <Link to="/destinations" className="btn sm">Add credentials</Link>}
         </div>
       )}
 

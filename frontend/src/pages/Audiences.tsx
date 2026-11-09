@@ -2,8 +2,10 @@ import { Link, useNavigate } from 'react-router-dom'
 import { api, fmt } from '../api'
 import type { Audience, Overview } from '../api'
 import { Empty, ErrorBox, PageHead, Spinner, useAsync } from '../components/ui'
+import { useMe } from '../components/me'
 
 export default function Audiences() {
+  const canBuild = useMe().can('audiences.edit')
   const nav = useNavigate()
   const { data, error, loading } = useAsync(() => api.get<Audience[]>('/audiences'))
   const overview = useAsync(() => api.get<Overview>('/overview'))
@@ -12,7 +14,7 @@ export default function Audiences() {
   return (
     <div className="page">
       <PageHead stage="segmentation" title="Audiences" subtitle="Groups of people defined by who they are and what they do — built visually, counted live in Databricks."
-        actions={<Link to="/audiences/new" className="btn primary">+ New audience</Link>} />
+        actions={canBuild ? <Link to="/audiences/new" className="btn primary">+ New audience</Link> : undefined} />
       <ErrorBox error={error} />
       <div className="card">
         {loading ? <div className="card-body"><Spinner label="Loading…" /></div> : data?.length ? (
@@ -49,7 +51,7 @@ export default function Audiences() {
             </tbody>
           </table>
         ) : (
-          <Empty title="No audiences yet" action={<Link to="/audiences/new" className="btn primary">Build your first audience</Link>}>
+          <Empty title="No audiences yet" action={canBuild ? <Link to="/audiences/new" className="btn primary">Build your first audience</Link> : undefined}>
             Combine attributes, traits and engagement events to find exactly the people you want to reach.
           </Empty>
         )}

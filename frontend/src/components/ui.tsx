@@ -131,10 +131,11 @@ const ICON_COLORS: Record<string, [string, string]> = {
   webhook: ['var(--blue-soft)', 'var(--blue)'],
   csv: ['var(--green-soft)', 'var(--green)'],
   hubspot: ['var(--amber-soft)', 'var(--amber)'],
+  gam: ['var(--blue-soft)', 'var(--blue)'],
   meta_custom_audience: ['var(--violet-soft)', 'var(--violet)'],
   sailthru: ['linear-gradient(135deg, #00B5B0, #058EA8)', '#fff'],
 }
-const ICON_TEXT: Record<string, string> = { webhook: '{ }', csv: 'CSV', hubspot: 'HS', meta_custom_audience: 'M', sailthru: 'ST' }
+const ICON_TEXT: Record<string, string> = { webhook: '{ }', csv: 'CSV', hubspot: 'HS', meta_custom_audience: 'M', sailthru: 'ST', gam: 'GAM' }
 
 export function DestIcon({ type, size = 34 }: { type: string; size?: number }) {
   const [bg, fg] = ICON_COLORS[type] ?? ['var(--surface-2)', 'var(--text-2)']
@@ -174,4 +175,11 @@ export function PageHead({ stage, title, subtitle, actions, back }: {
 
 export function WaitingBadge() {
   return <span className="badge amber"><span className="dot" /> Waiting for credentials</span>
+}
+
+/** Maker-checker state of a sync; nothing is shown once it's approved. */
+export function ApprovalBadge({ status }: { status: string | null | undefined }) {
+  if (status === 'pending') return <span className="badge amber"><span className="dot" /> Pending approval</span>
+  if (status === 'rejected') return <span className="badge red"><span className="dot" /> Changes requested</span>
+  return null
 }

@@ -17,6 +17,10 @@ import Inbox from './pages/Inbox'
 import Traits from './pages/Traits'
 import Governance from './pages/Governance'
 import ThemeSwitch from './components/ThemeSwitch'
+import Access from './pages/Access'
+import { MeProvider, setPersona, useMe } from './components/me'
+import { api, getPersona } from './api'
+import { useAsync } from './components/ui'
 
 const Icon = ({ d }: { d: string }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>
@@ -32,6 +36,7 @@ const I = {
   destinations: 'M22 12h-6l-2 3h-4l-2-3H2M5.5 5.1L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.1z',
   syncs: 'M21 12a9 9 0 0 1-15.5 6.2M3 12a9 9 0 0 1 15.5-6.2M21 4v5h-5M3 20v-5h5',
   rules: 'M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6zM9 12l2 2 4-4',
+  access: 'M15 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM4 21v-1a6 6 0 0 1 9.5-4.9M17 14v4M17 22h.01M19 18h-4',
 }
 
 interface Item { to: string; label: string; icon: string; match?: (path: string, search: URLSearchParams) => boolean }
@@ -56,7 +61,40 @@ const SECTIONS: { n: number; label: string; items: Item[] }[] = [
     ],
   },
 ]
+const ADMIN: Item[] = [{ to: '/access', label: 'Access', icon: I.access }]
 const ALL = [...TOP, ...SECTIONS.flatMap((s) => s.items)]
+
+function initials(name: string) {
+  return name.split(/[\s._@-]+/).filter(Boolean).slice(0, 2).map((p) => p[0]!.toUpperCase()).join('') || '?'
+}
+
+/** Who is signed in, their role, and (local development only) a persona picker. */
+function UserChip() {
+  const { me, roleLabel } = useMe()
+  const personas = useAsync(() => (me && !me.in_databricks_app ? api.get<string[]>('/dev/personas') : Promise.resolve([] as string[])), [me?.in_databricks_app])
+  if (!me) return null
+  const persona = getPersona()
+  return (
+    <div className="user-chip">
+      <div className="row" style={{ gap: 10 }}>
+        <span className="user-avatar" aria-hidden="true">{initials(me.name || me.email)}</span>
+        <div className="user-meta">
+          <strong title={me.email}>{me.name || me.email}</strong>
+          <small>{roleLabel}</small>
+        </div>
+      </div>
+      {!me.in_databricks_app && (
+        <label className="persona">
+          <span>Preview as</span>
+          <select value={persona} onChange={(e) => setPersona(e.target.value)}>
+            <option value="">Me (Platform Admin)</option>
+            {(personas.data ?? []).map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </label>
+      )}
+    </div>
+  )
+}
 
 function useActive() {
   const loc = useLocation()
@@ -70,6 +108,7 @@ function NavItem({ item, active }: { item: Item; active: boolean }) {
 
 function Layout() {
   const isActive = useActive()
+  const { canPlatform } = useMe()
   return (
     <div className="app">
       <header className="topbar">
@@ -93,7 +132,14 @@ function Layout() {
               {s.items.map((n) => <NavItem key={n.to} item={n} active={isActive(n)} />)}
             </div>
           ))}
+          {canPlatform('access.manage') && (
+            <div className="nav-group">
+              <div className="nav-section">Admin</div>
+              {ADMIN.map((n) => <NavItem key={n.to} item={n} active={isActive(n)} />)}
+            </div>
+          )}
         </nav>
+        <UserChip />
         <div className="sidebar-theme"><span>Theme</span><ThemeSwitch /></div>
         <div className="sidebar-foot">
           <span className="status-dot" aria-hidden="true" />
@@ -116,6 +162,7 @@ function Layout() {
           <Route path="/activations/new" element={<ActivationNew />} />
           <Route path="/activations/:id" element={<ActivationDetail />} />
           <Route path="/inbox" element={<Inbox />} />
+          <Route path="/access" element={<Access />} />
         </Routes>
       </main>
     </div>
@@ -124,6 +171,6 @@ function Layout() {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <BrowserRouter><Layout /></BrowserRouter>
+    <MeProvider><BrowserRouter><Layout /></BrowserRouter></MeProvider>
   </StrictMode>,
 )

@@ -3,6 +3,7 @@ import { api } from '../api'
 import type { Column, ColumnSettings, JoinKey, Model, Settings, SourceConnection } from '../api'
 import { Link } from 'react-router-dom'
 import { Empty, ErrorBox, Field, Modal, PageHead, Spinner, Toggle, useAsync } from '../components/ui'
+import { useMe } from '../components/me'
 
 
 const KIND_INFO = {
@@ -120,6 +121,8 @@ function ModelModal({ kind, existing, parent, onClose, onSaved }: {
   const set = (patch: Partial<Model>) => setM((x) => ({ ...x, ...patch }))
   const isSql = m.query_type === 'sql'
   const connections = useAsync(() => api.get<SourceConnection[]>('/connections'))
+  const me = useMe()
+  const brandChoices = me.me?.brands ?? []
   const defaultConn = connections.data?.find((c) => c.is_default)?.id ?? connections.data?.[0]?.id
   // Parents choose a connection; related and event models always use their parent's.
   const connectionId = kind === 'parent' ? (m.connection_id ?? defaultConn) : parent?.connection_id
@@ -156,8 +159,9 @@ function ModelModal({ kind, existing, parent, onClose, onSaved }: {
   const save = async () => {
     setSaving(true); setError(null)
     try {
-      if (existing) await api.put(`/models/${existing.id}`, { ...m, connection_id: kind === 'parent' ? connectionId : undefined })
-      else await api.post('/models', { ...m, kind, parent_id: parent?.id, connection_id: kind === 'parent' ? connectionId : undefined })
+      const brand = kind === 'parent' ? (m.brand_id ?? brandChoices[0]?.id ?? null) : undefined
+      if (existing) await api.put(`/models/${existing.id}`, { ...m, connection_id: kind === 'parent' ? connectionId : undefined, brand_id: brand })
+      else await api.post('/models', { ...m, kind, parent_id: parent?.id, connection_id: kind === 'parent' ? connectionId : undefined, brand_id: brand })
       onSaved()
     } catch (e) { setError((e as Error).message) } finally { setSaving(false) }
   }
@@ -173,6 +177,14 @@ function ModelModal({ kind, existing, parent, onClose, onSaved }: {
         <Field label="Databricks connection" help="Where this parent and all its related and event models are queried. Manage connections on the Sources page.">
           <select className="input" value={connectionId ?? ''} onChange={(e) => { set({ connection_id: Number(e.target.value) }); if (!existing) { set({ table_ref: '' }); setCols([]) } }}>
             {connections.data!.map((c) => <option key={c.id} value={c.id}>{c.name} · {c.auth_type === 'oauth' ? 'service principal' : 'personal token'}</option>)}
+          </select>
+        </Field>
+      )}
+      {kind === 'parent' && (
+        <Field label="Brand" help="Only people with a role on this brand can see this parent model and build audiences on it.">
+          <select className="input" value={m.brand_id ?? brandChoices[0]?.id ?? ''} onChange={(e) => set({ brand_id: e.target.value ? Number(e.target.value) : null })}>
+            {brandChoices.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            <option value="">No brand (Platform Admins only)</option>
           </select>
         </Field>
       )}
@@ -319,6 +331,8 @@ function SchemaDiagram({ parent, children }: { parent: Model; children: Model[] 
 export default function Setup() {
   const models = useAsync(() => api.get<Model[]>('/models'))
   const settings = useAsync(() => api.get<Settings>('/settings'))
+  const me = useMe()
+  const admin = me.canPlatform('schema.manage')
   const [asOf, setAsOf] = useState('')
   const [savedAsOf, setSavedAsOf] = useState(false)
   const [modal, setModal] = useState<{ kind: Model['kind']; existing?: Model; parent: Model | null } | null>(null)
@@ -336,7 +350,8 @@ export default function Setup() {
     <div className="page">
       <PageHead stage="schema" title="Data model"
         subtitle={<>Define what one audience member is and how behavior connects to it. Tables are read from <Link to="/sources">Sources</Link>.</>}
-        actions={<button className="btn primary" onClick={() => setModal({ kind: 'parent', parent: null })}>+ Parent model</button>} />
+        actions={admin ? <button className="btn primary" onClick={() => setModal({ kind: 'parent', parent: null })}>+ Parent model</button>
+          : <span className="badge" title="Only Platform Admins can change the data model">View only</span>} />
 
       {parents.map((parent) => (
         <div key={'d' + parent.id} className="card diagram-card">
@@ -350,7 +365,7 @@ export default function Setup() {
 
       {models.loading ? <Spinner label="Loading schema…" /> : parents.length === 0 ? (
         <div className="card">
-          <Empty title="No parent model yet" action={<button className="btn primary" onClick={() => setModal({ kind: 'parent', parent: null })}>Choose parent model</button>}>
+          <Empty title="No parent model yet" action={admin ? <button className="btn primary" onClick={() => setModal({ kind: 'parent', parent: null })}>Choose parent model</button> : undefined}>
             Start with the table that has one row per customer (or household, or account).
           </Empty>
         </div>
@@ -361,13 +376,14 @@ export default function Setup() {
             <div className="card-head">
               <div className="row" style={{ gap: 12 }}>
                 <span className="badge brand">Parent</span>
+                <span className="badge">{me.brandName(parent.brand_id)}</span>
                 <div><h2>{parent.name}</h2><div className="small muted mono">{parent.query_type === 'sql' ? 'SQL query' : parent.table_ref} · key {parent.primary_key} · {parent.columns.length} columns</div></div>
               </div>
               <div className="row">
-                <ParentAsOf parentId={parent.id} settings={settings.data} onSave={(value) => saveSetting({ parent_as_of_date: { parent_id: parent.id, value } } as unknown as Partial<Settings>)} />
-                <button className="btn sm" onClick={() => setModal({ kind: 'parent', existing: parent, parent: null })}>Edit</button>
-                <button className="btn sm" onClick={() => setModal({ kind: 'related', parent })}>+ Related</button>
-                <button className="btn sm" onClick={() => setModal({ kind: 'event', parent })}>+ Event</button>
+                {admin && <ParentAsOf parentId={parent.id} settings={settings.data} onSave={(value) => saveSetting({ parent_as_of_date: { parent_id: parent.id, value } } as unknown as Partial<Settings>)} />}
+                {admin && <button className="btn sm" onClick={() => setModal({ kind: 'parent', existing: parent, parent: null })}>Edit</button>}
+                {admin && <button className="btn sm" onClick={() => setModal({ kind: 'related', parent })}>+ Related</button>}
+                {admin && <button className="btn sm" onClick={() => setModal({ kind: 'event', parent })}>+ Event</button>}
               </div>
             </div>
             {children.length ? (
@@ -383,8 +399,8 @@ export default function Setup() {
                       <td className="small">{m.merge_columns.length ? m.merge_columns.join(', ') : <span className="faint">—</span>}</td>
                       <td className="mono small">{m.timestamp_column ?? '—'}</td>
                       <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                        <button className="btn ghost sm" onClick={() => setModal({ kind: m.kind, existing: m, parent })}>Edit</button>
-                        <button className="btn ghost sm danger" onClick={() => remove(m)}>Remove</button>
+                        {admin && <button className="btn ghost sm" onClick={() => setModal({ kind: m.kind, existing: m, parent })}>Edit</button>}
+                        {admin && <button className="btn ghost sm danger" onClick={() => remove(m)}>Remove</button>}
                       </td>
                     </tr>
                   ))}
@@ -396,8 +412,8 @@ export default function Setup() {
       })}
 
       <div className="settings-card">
-        <div className="card card-pad stack">
-          <h2>Workspace settings</h2>
+        <fieldset className="card card-pad stack" disabled={!me.canPlatform('settings.manage')} style={{ margin: 0, minWidth: 0 }}>
+          <h2>Workspace settings {!me.canPlatform('settings.manage') && <span className="badge" style={{ marginLeft: 6 }}>View only</span>}</h2>
           <Field label="Analysis date" help="Relative time windows count back from this date. Leave empty to use today (recommended for live data).">
             <div className="row">
               <input type="date" className="input" value={asOf} onChange={(e) => saveAsOf(e.target.value)} />
@@ -416,7 +432,7 @@ export default function Setup() {
             <span><strong>Audience snapshots</strong>
               <div className="small muted">After each sync, record who entered or exited the audience in <span className="mono">{settings.data?.snapshot_table}</span>.</div></span>
           </label>
-        </div>
+        </fieldset>
       </div>
 
       {modal && (

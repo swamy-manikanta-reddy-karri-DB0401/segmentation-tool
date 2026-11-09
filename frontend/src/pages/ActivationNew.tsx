@@ -4,6 +4,7 @@ import { api, fmt } from '../api'
 import type { Audience, ConfigField, Destination, DestinationType, Mapping, Schedule, Schema, Sync, SyncConfig, SyncTemplate, SyncTypeDef } from '../api'
 import ScheduleEditor, { fromApi, toApi } from '../components/ScheduleEditor'
 import { DestIcon, Empty, ErrorBox, Field, Spinner, Toggle, useAsync } from '../components/ui'
+import { useMe } from '../components/me'
 
 const MODE_INFO: Record<string, string> = {
   upsert: 'Update existing records and insert new ones',
@@ -47,6 +48,30 @@ function OptionInput({ field, value, columns, onChange }: { field: ConfigField; 
   return (
     <input className="input" type={field.type === 'number' ? 'number' : 'text'} value={String(value ?? '')}
       placeholder={field.default != null ? String(field.default) : ''} onChange={(e) => onChange(e.target.value)} />
+  )
+}
+
+/** Google Ad Manager: create the audience segment from here instead of in Ad Manager. */
+function CreateSegment({ destId, defaultName, days, onCreated }: { destId: number; defaultName: string; days: unknown; onCreated: (id: string) => void }) {
+  const [name, setName] = useState(defaultName)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const create = async () => {
+    setBusy(true); setError(null)
+    try {
+      const seg = await api.post<{ id: string; name: string }>(`/destinations/${destId}/segments`, { name, membership_days: days || undefined })
+      onCreated(seg.id)
+    } catch (e) { setError((e as Error).message) } finally { setBusy(false) }
+  }
+  return (
+    <div className="create-seg">
+      <div className="small muted">No segment yet? Create one in Ad Manager now (or leave the ID empty and it's created on the first run).</div>
+      <div className="row">
+        <input className="input grow" value={name} placeholder="Segment name" onChange={(e) => setName(e.target.value)} />
+        <button className="btn" onClick={create} disabled={busy || !name.trim()}>{busy ? 'Creating…' : 'Create in Ad Manager'}</button>
+      </div>
+      <ErrorBox error={error} />
+    </div>
   )
 }
 
@@ -144,6 +169,11 @@ export default function ActivationNew() {
 
   const parent = schema.data?.parent
   const dest = dests.data?.find((d) => d.id === destId)
+  const { can } = useMe()
+  const audienceBrand = audiences.data?.find((a) => a.id === audienceId)?.brand_id ?? null
+  const needsApproval = !can('syncs.approve', audienceBrand)
+  // A sync can only use destinations shared across brands or owned by the audience's brand.
+  const brandDests = (dests.data ?? []).filter((d) => d.brand_id == null || audienceBrand == null || d.brand_id === audienceBrand)
   const dtype = types.data?.find((t) => t.type === dest?.type)
   const st: SyncTypeDef | undefined = dtype?.sync_types.find((t) => t.name === cfg.sync_type) ?? dtype?.sync_types[0]
   const audience = audiences.data?.find((a) => a.id === audienceId)
@@ -199,7 +229,8 @@ export default function ActivationNew() {
     const body = { name, audience_id: audienceId, destination_id: destId, config: cfg, schedule: toApi(schedule), enabled: true }
     try {
       const s = editId ? await api.put<Sync>(`/syncs/${editId}`, body) : await api.post<Sync>('/syncs', body)
-      if (runNow) await api.post(`/syncs/${s.id}/run`, {})
+      if (s.approval_status !== 'approved') { nav(`/activations/${s.id}?submitted=1`); return }
+      if (runNow && s.destination_configured !== false) await api.post(`/syncs/${s.id}/run`, {})
       nav(`/activations/${s.id}`)
     } catch (e) { setError((e as Error).message) } finally { setSaving(false) }
   }
@@ -245,7 +276,7 @@ export default function ActivationNew() {
           </Field>
           <Field label="Send it to…">
             <div className="tiles">
-              {dests.data.map((d) => (
+              {brandDests.map((d) => (
                 <button key={d.id} className={`tile ${destId === d.id ? 'selected' : ''}`} onClick={() => setDestId(d.id)}>
                   <DestIcon type={d.type} />
                   <div><strong>{d.name}</strong><span>{types.data?.find((t) => t.type === d.type)?.label}</span></div>
@@ -318,6 +349,10 @@ export default function ActivationNew() {
             {visibleOptions.map((o) => (
               <Field key={o.name} label={`${o.label}${o.required ? '' : ' (optional)'}`} help={o.help}>
                 <OptionInput field={o} value={cfg.options[o.name]} columns={columns} onChange={(v) => set({ options: { ...cfg.options, [o.name]: v } })} />
+                {dest?.type === 'gam' && o.name === 'list_id' && !cfg.options.list_id && (
+                  <CreateSegment destId={dest.id} defaultName={audience?.name ?? ''} days={cfg.options.membership_days}
+                    onCreated={(id) => set({ options: { ...cfg.options, list_id: id } })} />
+                )}
               </Field>
             ))}
           </div>
@@ -387,11 +422,21 @@ export default function ActivationNew() {
               <button className="btn sm" disabled={!templateName.trim()} onClick={saveTemplate}>{templateSaved ? 'Saved ✓' : 'Save template'}</button>
             </div>
           </Field>
-          <label className="row small"><input type="checkbox" checked={runNow} onChange={(e) => setRunNow(e.target.checked)} /> Run once right after saving</label>
+          {needsApproval ? (
+            <div className="callout amber" style={{ marginBottom: 0 }}>
+              <div className="callout-icon">✓</div>
+              <div className="grow">
+                <strong>This sync will be submitted for approval</strong>
+                <div className="small muted">A Brand Marketing Admin reviews it before anything is sent to {dest?.name ?? 'the destination'}.</div>
+              </div>
+            </div>
+          ) : (
+            <label className="row small"><input type="checkbox" checked={runNow} onChange={(e) => setRunNow(e.target.checked)} /> Run once right after saving</label>
+          )}
           <ErrorBox error={error} />
           <div className="spread">
             <button className="btn" onClick={() => setStep(2)}>Back</button>
-            <button className="btn primary" onClick={save} disabled={saving || !name}>{saving ? 'Saving…' : editId ? 'Save changes' : 'Create sync'}</button>
+            <button className="btn primary" onClick={save} disabled={saving || !name}>{saving ? 'Saving…' : needsApproval ? 'Submit for approval' : editId ? 'Save changes' : 'Create sync'}</button>
           </div>
         </div>
       )}

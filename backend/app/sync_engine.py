@@ -292,8 +292,13 @@ def execute(sync_id: int, run_id: int, full_resync: bool = False) -> None:
     dbx = client()
     context = {"sync_id": sync_id, "run_id": run_id, "audience_name": audience["name"], "sync_type": st.name,
                "mode": cfg["mode"], "options": cfg["options"], "match_field": (cfg.get("match") or {}).get("field"),
-               "model_id": audience["id"], "model_name": audience["name"]}
+               "model_id": audience["id"], "model_name": audience["name"],
+               "mapped_targets": [m.get("target") for m in cfg.get("mapping") or []]}
     dest = dest_cls(dest_row["config"], context)
+    created = dest.prepare()
+    if created:  # e.g. an ad-platform segment made on the first run: remember it for later runs
+        cfg["options"].update(created)
+        db.update("syncs", sync_id, {"config": {**sync["config"], "options": {**(sync["config"].get("options") or {}), **created}}})
 
     # 1. materialize current rows
     dbx.execute(f"CREATE SCHEMA IF NOT EXISTS {_state_schema()}")
@@ -386,7 +391,7 @@ def write_audience_snapshot(audience: dict, schema: dict) -> dict:
     """Record who entered / exited the audience since the previous snapshot, in
     <state>.audience_membership (row_id, audience_id, timestamp, event_type, split_group)."""
     s = _state_schema()
-    members = f"{s}.{quote_ident(f'audience_{audience['id']}_members')}"
+    members = f"{s}.{quote_ident('audience_' + str(audience['id']) + '_members')}"
     history = f"{s}.audience_membership"
     dbx = client()
     comp = compiler_for(schema)
@@ -406,7 +411,7 @@ def write_audience_snapshot(audience: dict, schema: dict) -> dict:
     dbx.execute(f"CREATE TABLE IF NOT EXISTS {history} (ht_row_id STRING, ht_audience_id BIGINT, ht_timestamp TIMESTAMP, "
                 f"ht_event_type STRING, ht_split_group STRING)")
     dbx.execute(f"CREATE TABLE IF NOT EXISTS {members} (row_id STRING, split_group STRING)")
-    new = f"{s}.{quote_ident(f'audience_{audience['id']}_members_new')}"
+    new = f"{s}.{quote_ident('audience_' + str(audience['id']) + '_members_new')}"
     dbx.execute(f"CREATE OR REPLACE TABLE {new} (row_id STRING, split_group STRING)")
     dbx.execute(f"INSERT INTO {new} SELECT DISTINCT * FROM (\n{c.sql}\n)", c.params)
     aid = int(audience["id"])

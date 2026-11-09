@@ -41,8 +41,7 @@ def seed() -> None:
         "name": "Databricks (personal token)", "host": host, "auth_type": "pat", "client_id": "", "secret": token,
         "warehouse_id": legacy.get("warehouse_id") or config.DATABRICKS_WAREHOUSE_ID,
         "state_schema": legacy.get("state_schema") or config.CDP_STATE_SCHEMA, "created_at": db.now()})
-    db.conn().execute("UPDATE models SET connection_id = ? WHERE kind = 'parent' AND connection_id IS NULL", (cid,))
-    db.conn().commit()
+    db.execute("UPDATE models SET connection_id = ? WHERE kind = 'parent' AND connection_id IS NULL", (cid,))
 
 
 def all_connections() -> list[dict]:

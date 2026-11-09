@@ -117,7 +117,7 @@ def recover_interrupted_runs() -> None:
 def due_syncs(now: datetime | None = None) -> list[dict]:
     now = now or datetime.now(timezone.utc)
     from .insights import destination_configured  # syncs wait until their destination has credentials
-    return [s for s in db.query("SELECT * FROM syncs WHERE enabled = 1 AND next_run_at IS NOT NULL")
+    return [s for s in db.query("SELECT * FROM syncs WHERE enabled = 1 AND approval_status = 'approved' AND next_run_at IS NOT NULL")
             if datetime.fromisoformat(s["next_run_at"]) <= now and not sync_engine.is_running(s["id"])
             and destination_configured(s["destination_id"])]
 

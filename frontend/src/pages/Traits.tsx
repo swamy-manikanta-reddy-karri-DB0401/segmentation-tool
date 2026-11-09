@@ -5,6 +5,7 @@ import type { Schema, Trait, TraitConfig, TraitMethod } from '../api'
 import { BuilderProvider } from '../components/builder/ConditionEditor'
 import TraitConfigEditor, { METHODS } from '../components/TraitConfigEditor'
 import { Empty, ErrorBox, Field, Modal, PageHead, Spinner, useAsync } from '../components/ui'
+import { useMe } from '../components/me'
 
 function TraitModal({ schema, existing, onClose, onSaved }: { schema: Schema; existing?: Trait; onClose: () => void; onSaved: () => void }) {
   const [name, setName] = useState(existing?.name ?? '')
@@ -63,6 +64,7 @@ export default function Traits() {
   const schema = useAsync(() => api.get<Schema>('/schema'))
   const [modal, setModal] = useState<{ existing?: Trait } | null>(null)
   const s = schema.data
+  const me = useMe()
 
   const remove = async (t: Trait) => {
     if (!confirm(`Delete trait “${t.name}”? Audiences and syncs that use it will stop working.`)) return
@@ -73,11 +75,12 @@ export default function Traits() {
   if (!s?.parent) {
     return <div className="page"><Empty title="Set up your data first" action={<Link to="/setup" className="btn primary">Open data setup</Link>}>Traits are calculated from your customer data.</Empty></div>
   }
+  const canManage = me.can('traits.manage', s.parent.brand_id ?? null)
   return (
     <BuilderProvider value={{ schema: s, audiences: [] }}>
       <div className="page">
         <PageHead stage="modeling" title="Traits" subtitle="Reusable calculated values — total page views, video minutes, favorite section — for filters, profiles and syncs."
-          actions={<button className="btn primary" onClick={() => setModal({})} disabled={!s.models.length}>+ New trait</button>} />
+          actions={canManage ? <button className="btn primary" onClick={() => setModal({})} disabled={!s.models.length}>+ New trait</button> : undefined} />
         <ErrorBox error={schema.error} />
         <div className="card">
           {s.traits.length ? (
@@ -92,15 +95,15 @@ export default function Traits() {
                     <td className="muted">{s.virtual_columns.find((v) => v.name === `trait.${t.id}`)?.type}</td>
                     <td className="muted">{fmt.ago((t as Trait & { updated_at?: string }).updated_at)}</td>
                     <td style={{ textAlign: 'right' }}>
-                      <button className="btn ghost sm" onClick={() => setModal({ existing: t })}>Edit</button>
-                      <button className="btn ghost sm danger" onClick={() => remove(t)}>Delete</button>
+                      {canManage && <button className="btn ghost sm" onClick={() => setModal({ existing: t })}>Edit</button>}
+                      {canManage && <button className="btn ghost sm danger" onClick={() => remove(t)}>Delete</button>}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           ) : (
-            <Empty title="No traits yet" action={<button className="btn primary" onClick={() => setModal({})}>Create a trait</button>}>
+            <Empty title="No traits yet" action={canManage ? <button className="btn primary" onClick={() => setModal({})}>Create a trait</button> : undefined}>
               Build a value once — like total spend over 90 days — and reuse it in every audience and sync.
             </Empty>
           )}

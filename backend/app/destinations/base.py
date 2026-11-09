@@ -25,6 +25,7 @@ class ConfigField:
     default: str | int | None = None
     options: list[dict] = field(default_factory=list)  # for select: [{"value", "label"}]
     modes: list[str] = field(default_factory=list)  # only shown for these modes (empty = all)
+    secret: bool = False  # masked like a password when read back (e.g. a pasted JSON key)
 
 
 @dataclass
@@ -131,6 +132,11 @@ class Destination:
 
     def batch_size_for_run(self) -> int:
         return self.batch_size
+
+    def prepare(self) -> dict:
+        """Runs before anything is sent. Return sync-option updates to save (e.g. the ID of a list/segment
+        the connector just created), or {}."""
+        return {}
 
     def test(self) -> str:
         """Check credentials; return a human-readable success message or raise."""

@@ -20,6 +20,7 @@ export interface JoinKey { parent: string; model: string }
 export interface Model {
   id: number
   connection_id?: number | null
+  brand_id?: number | null
   kind: 'parent' | 'related' | 'event'
   name: string
   description: string
@@ -172,6 +173,8 @@ export interface Audience {
   id: number
   parent_id: number
   parent_name?: string
+  brand_id?: number | null
+  created_by?: string
   splits: Splits
   name: string
   description: string
@@ -192,6 +195,7 @@ export interface ConfigField {
   default: string | number | null
   options: { value: string; label: string }[]
   modes: string[]
+  secret?: boolean
 }
 
 export interface TargetField { name: string; label: string; required: boolean }
@@ -223,6 +227,7 @@ export interface Destination {
   id: number
   name: string
   type: string
+  brand_id?: number | null
   config: Record<string, string>
   created_at: string
   sync_count?: number
@@ -279,6 +284,14 @@ export interface Sync {
   last_status: string | null
   running: boolean
   destination_configured?: boolean
+  brand_id?: number | null
+  approval_status: 'approved' | 'pending' | 'rejected'
+  created_by?: string
+  submitted_by?: string
+  approved_by?: string
+  approved_at?: string | null
+  review_note?: string
+  can?: { edit: boolean; approve: boolean; run: boolean }
 }
 
 export interface SyncRun {
@@ -375,12 +388,44 @@ export interface Profile {
   events: { model_id: number; model_name: string; timestamp_column: string | null; columns: string[]; rows: unknown[][] }[]
 }
 
+export interface Brand { id: number; name: string; description: string; created_at: string; parent_count?: number; destination_count?: number }
+export type BrandPerm = 'view' | 'audiences.edit' | 'traits.manage' | 'syncs.edit' | 'syncs.approve' | 'syncs.run' | 'destinations.manage' | 'governance.manage'
+export type PlatformPerm = 'source.manage' | 'schema.manage' | 'settings.manage' | 'access.manage'
+export interface Me {
+  email: string
+  name: string
+  groups: string[]
+  platform_admin: boolean
+  roles: { role: string; label: string; brand_id: number | null; destination_ids: number[] }[]
+  platform: Record<PlatformPerm, boolean>
+  brands: { id: number; name: string; can: Record<BrandPerm, boolean> }[]
+  in_databricks_app: boolean
+}
+export interface RoleInfo { role: string; label: string; description: string; permissions: string[] }
+export interface RoleBinding {
+  id: number
+  principal_type: 'user' | 'group'
+  principal: string
+  role: string
+  brand_id: number | null
+  brand_name?: string | null
+  destination_ids: number[]
+  created_by: string
+  created_at: string
+}
+export interface AuditEntry { id: number; at: string; actor: string; action: string; object_type: string; object_id: number | null; brand_id: number | null; details: Record<string, unknown> }
+
+export const PERSONA_KEY = 'mm-cdp-persona'
+export function getPersona(): string {
+  try { return localStorage.getItem(PERSONA_KEY) || '' } catch { return '' }
+}
+
 export class ApiError extends Error {}
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method,
-    headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+    headers: { ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(getPersona() ? { 'X-Dev-User': getPersona() } : {}) },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
   if (!res.ok) {

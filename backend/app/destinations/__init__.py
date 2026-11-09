@@ -1,12 +1,13 @@
 from .base import Destination
 from .csv_export import CsvExport
+from .gam import GoogleAdManager
 from .hubspot import HubSpot
 from .meta import MetaCustomAudience
 from .sailthru import Sailthru
 from .webhook import Webhook
 
 REGISTRY: dict[str, type[Destination]] = {
-    cls.type: cls for cls in (Sailthru, Webhook, CsvExport, HubSpot, MetaCustomAudience)
+    cls.type: cls for cls in (Sailthru, GoogleAdManager, Webhook, CsvExport, HubSpot, MetaCustomAudience)
 }
 
 

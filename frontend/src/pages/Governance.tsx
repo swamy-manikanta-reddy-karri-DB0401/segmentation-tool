@@ -4,6 +4,7 @@ import type { Audience, Destination, DestinationRule, GroupNode, PriorityList, S
 import { BuilderProvider, GroupEditor } from '../components/builder/ConditionEditor'
 import { useSearchParams } from 'react-router-dom'
 import { DestIcon, Empty, ErrorBox, Field, Modal, PageHead, Spinner, useAsync } from '../components/ui'
+import { useMe } from '../components/me'
 
 function RuleModal({ schema, dests, existing, onClose, onSaved }: {
   schema: Schema; dests: Destination[]; existing?: DestinationRule; onClose: () => void; onSaved: () => void
@@ -98,10 +99,12 @@ export default function Governance() {
   const [listModal, setListModal] = useState<{ existing?: PriorityList } | null>(null)
   const [params] = useSearchParams()
   const tab = params.get('tab') === 'priority' ? 'priority' : 'rules'
+  const me = useMe()
 
   if (schema.loading || audiences.loading || dests.loading) return <div className="page"><Spinner label="Loading…" /></div>
   const s = schema.data
   if (!s?.parent) return <div className="page"><Empty title="Set up your data first" /></div>
+  const gov = me.can('governance.manage', s.parent.brand_id ?? null)
   const audName = (id: number) => audiences.data?.find((a) => a.id === id)?.name ?? `#${id}`
 
   return (
@@ -109,17 +112,17 @@ export default function Governance() {
       <div className="page">
         {tab === 'priority' ? (
           <PageHead stage="segmentation" title="Priority lists" subtitle="When someone qualifies for several audiences, they only reach the highest-priority one — no duplicate messages."
-            actions={<button className="btn primary" disabled={(audiences.data?.length ?? 0) < 2} onClick={() => setListModal({})}>+ Priority list</button>} />
+            actions={gov ? <button className="btn primary" disabled={(audiences.data?.length ?? 0) < 2} onClick={() => setListModal({})}>+ Priority list</button> : undefined} />
         ) : (
           <PageHead stage="activation" title="Destination rules" subtitle="Filters applied at sync time — for consent, privacy or compliance. Audience membership never changes."
-            actions={<button className="btn primary" disabled={!dests.data?.length} onClick={() => setRuleModal({})}>+ Destination rule</button>} />
+            actions={gov ? <button className="btn primary" disabled={!dests.data?.length} onClick={() => setRuleModal({})}>+ Destination rule</button> : undefined} />
         )}
         <ErrorBox error={rules.error || lists.error} />
 
         {tab === 'rules' && <div className="card" style={{ marginBottom: 20 }}>
           <div className="card-head">
             <div><h2>Destination rules</h2><div className="small muted">Filters applied at sync time — for consent, privacy or compliance.</div></div>
-            <button className="btn sm primary" disabled={!dests.data?.length} onClick={() => setRuleModal({})}>+ Add rule</button>
+            {gov && <button className="btn sm primary" disabled={!dests.data?.length} onClick={() => setRuleModal({})}>+ Add rule</button>}
           </div>
           {rules.data?.length ? (
             <table className="table">
@@ -131,8 +134,8 @@ export default function Governance() {
                     <td><span className="row"><DestIcon type={r.destination_type} size={24} />{r.destination_name}</span></td>
                     <td className="muted">{r.definition.conditions.length} filter{r.definition.conditions.length === 1 ? '' : 's'}</td>
                     <td style={{ textAlign: 'right' }}>
-                      <button className="btn ghost sm" onClick={() => setRuleModal({ existing: r })}>Edit</button>
-                      <button className="btn ghost sm danger" onClick={async () => { await api.del(`/destination-rules/${r.id}`); rules.reload() }}>Delete</button>
+                      {gov && <button className="btn ghost sm" onClick={() => setRuleModal({ existing: r })}>Edit</button>}
+                      {gov && <button className="btn ghost sm danger" onClick={async () => { await api.del(`/destination-rules/${r.id}`); rules.reload() }}>Delete</button>}
                     </td>
                   </tr>
                 ))}
@@ -144,7 +147,7 @@ export default function Governance() {
         {tab === 'priority' && <div className="card">
           <div className="card-head">
             <div><h2>Priority lists</h2><div className="small muted">Prevent duplicate messages: each person only reaches their highest-priority audience.</div></div>
-            <button className="btn sm primary" disabled={(audiences.data?.length ?? 0) < 2} onClick={() => setListModal({})}>+ Add priority list</button>
+            {gov && <button className="btn sm primary" disabled={(audiences.data?.length ?? 0) < 2} onClick={() => setListModal({})}>+ Add priority list</button>}
           </div>
           {lists.data?.length ? (
             <table className="table">
@@ -155,8 +158,8 @@ export default function Governance() {
                     <td><strong>{l.name}</strong></td>
                     <td><div className="row wrap">{l.config.audience_ids.map((id, i) => <span key={id} className="badge">{i + 1}. {audName(id)}</span>)}</div></td>
                     <td style={{ textAlign: 'right' }}>
-                      <button className="btn ghost sm" onClick={() => setListModal({ existing: l })}>Edit</button>
-                      <button className="btn ghost sm danger" onClick={async () => { await api.del(`/priority-lists/${l.id}`); lists.reload() }}>Delete</button>
+                      {gov && <button className="btn ghost sm" onClick={() => setListModal({ existing: l })}>Edit</button>}
+                      {gov && <button className="btn ghost sm danger" onClick={async () => { await api.del(`/priority-lists/${l.id}`); lists.reload() }}>Delete</button>}
                     </td>
                   </tr>
                 ))}
