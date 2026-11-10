@@ -1,10 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import { api } from '../api'
-import type { Destination, DestinationType } from '../api'
+import type { Destination, DestinationType, Sync } from '../api'
 import { Link } from 'react-router-dom'
-import { DestIcon, Empty, ErrorBox, Field, Modal, PageHead, useAsync } from '../components/ui'
+import { DestIcon, ErrorBox, Field, Modal, PageHead, useAsync } from '../components/ui'
 import { useMe } from '../components/me'
 import { askConfirm, FilterChips, matches, NoResults, SearchBox, SkeletonRows, toast, Toolbar, useUrlState } from '../components/kit'
+import { CollectionLayout, Facts, Inspector, ListPane, ListRow, Section, StatTile } from '../components/collection'
+import { syncHealth } from '../ux/syncHealth'
 import '../ux/activate.css'
 
 const MASK = '••••••••'
@@ -53,6 +56,7 @@ function DestinationModal({ types, existing, onClose, onSaved }: {
         <button className="btn" onClick={onClose}>Cancel</button>
         <button className="btn primary" onClick={save} disabled={saving || missing || !name}>{saving ? 'Saving…' : 'Save'}</button>
       </>}>
+      <div className="dx2-modal-id"><DestIcon type={type.type} size={40} /><div><strong>{type.label}</strong><small>{type.category}</small></div></div>
       <Field label="Name"><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></Field>
       {!existing && (brands.length > 1 || me.me?.platform_admin) && (
         <Field label="Brand" help="Only this brand's syncs can send to this destination. “Shared” destinations can be used by every brand and are managed by Platform Admins.">
@@ -110,7 +114,7 @@ function Catalog({ types, onChoose, onClose }: { types: DestinationType[]; onCho
       <div className="dst-catalog">
         {shown.map((t) => (
           <button key={t.type} className={`dst-type ${t.type === 'sailthru' ? 'featured' : ''}`} onClick={() => onChoose(t)}>
-            <DestIcon type={t.type} size={40} />
+            <DestIcon type={t.type} size={44} />
             <span className="wz-opt-main">
               <strong>{t.label}{t.type === 'sailthru' && <span className="badge brand">Recommended</span>}{t.beta && <span className="badge amber">Beta</span>}</strong>
               <small>{t.description}</small>
@@ -121,6 +125,150 @@ function Catalog({ types, onChoose, onClose }: { types: DestinationType[]; onCho
         {!shown.length && <div className="dm-none">No destinations match “{q}”.</div>}
       </div>
     </Modal>
+  )
+}
+
+type Trig = { key: string; label: string }
+type TrigCfg = { enabled: boolean; severity: string; source: string; min_rows?: number; days?: number; minutes?: number }
+type Pol = { triggers: Record<string, TrigCfg> }
+
+const thresh = (key: string, t: TrigCfg) =>
+  key === 'rejected' ? `≥ ${t.min_rows ?? 1} rejected` : key === 'throughput' ? `${t.days ?? 7} days` : key === 'audience' ? `< ${t.min_rows ?? 1} people` : key === 'duration' ? `> ${t.minutes ?? 60} min` : ''
+
+type TargetingSummary = {
+  clients: string[]; lookup_url: string; last_denied: { identity: string; at: string } | null
+  values: { key: string; audience: string; members: number; updated_at: string }[]
+}
+
+/** Key-value targeting: how the website asks "which audiences is this visitor in?" and passes it to Ad Manager. */
+function WebsiteSetup({ dkey }: { dkey: string }) {
+  const me = useMe()
+  const admin = me.canPlatform('settings.manage')
+  const summary = useAsync(() => api.get<TargetingSummary>('/targeting/summary'))
+  const [draft, setDraft] = useState('')
+  const s = summary.data
+  const values = (s?.values ?? []).filter((v) => v.key === dkey)
+  const lookup = s?.lookup_url || `${window.location.origin}/api/targeting?user_id=VISITOR_ID`
+  const saveClients = async (list: string[]) => {
+    try { await api.put('/targeting/clients', { clients: list }); summary.reload(); setDraft(''); toast('Allowed callers updated') }
+    catch (e) { toast((e as Error).message, 'error') }
+  }
+  const copy = (text: string) => navigator.clipboard?.writeText(text).then(() => toast('Copied'))
+  const snippet = `// 1) On your server: look the visitor up (service-principal OAuth token)
+const r = await fetch('${lookup.replace('VISITOR_ID', "' + visitorId + '")}', { headers: { Authorization: 'Bearer ' + token } })
+const { targeting } = await r.json()   // e.g. { "${dkey}": ["engaged_non_subs"] }
+
+// 2) In the page, before ads load: pass it to Ad Manager
+googletag.cmd.push(() => {
+  googletag.pubads().setTargeting('${dkey}', targeting['${dkey}'] || [])
+})`
+  return (
+    <Section title="Website setup" aside={<span className="small muted">key <code>{dkey}</code></span>}>
+      <ol className="kv-steps">
+        <li><strong>Your site's server looks up the visitor</strong> with their ID (the same ID you map in the sync).
+          <div className="kv-url"><code>{lookup}</code><button className="btn ghost sm" onClick={() => copy(lookup)}>Copy</button></div></li>
+        <li><strong>The page passes the result to Ad Manager</strong> as a key-value before ads load.
+          <div className="kv-code"><pre className="code">{snippet}</pre><button className="btn ghost sm" onClick={() => copy(snippet)}>Copy code</button></div></li>
+        <li><strong>Your ad team targets line items</strong> with <code>{dkey}</code> is <em>one of the values below</em> (Inventory → Key-values in Ad Manager).</li>
+      </ol>
+      <div className="kv-block">
+        <div className="kv-block-head"><strong>Audiences available as values</strong><span className="small muted">visitors per value</span></div>
+        {summary.loading ? <SkeletonRows rows={2} cols={3} /> : values.length ? values.map((v) => (
+          <div key={v.audience} className="kv-row"><code>{dkey}={v.audience}</code><span className="grow" /><strong>{v.members.toLocaleString()}</strong></div>
+        )) : <div className="small muted">Values appear after the first sync to this destination runs.</div>}
+      </div>
+      <div className="kv-block">
+        <div className="kv-block-head"><strong>Who may call the lookup</strong><span className="small muted">Databricks identities with CAN USE on this app</span></div>
+        {(s?.clients ?? []).map((c) => (
+          <div key={c} className="kv-row"><code>{c}</code><span className="grow" />{admin && <button className="btn ghost sm danger" onClick={() => saveClients((s?.clients ?? []).filter((x) => x !== c))}>Remove</button>}</div>
+        ))}
+        {!s?.clients?.length && <div className="small muted">Only Platform Admins so far. Add the service principal your website's server uses.</div>}
+        {admin && s?.last_denied && !(s.clients ?? []).includes(s.last_denied.identity.toLowerCase()) && (
+          <div className="kv-denied">Refused <code>{s.last_denied.identity}</code><button className="btn sm primary" onClick={() => saveClients([...(s?.clients ?? []), s!.last_denied!.identity])}>Allow it</button></div>
+        )}
+        {admin && (
+          <div className="row" style={{ marginTop: 6 }}>
+            <input className="input sm grow" value={draft} placeholder="Service principal application ID or email" onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && draft.trim() && saveClients([...(s?.clients ?? []), draft.trim()])} />
+            <button className="btn sm" disabled={!draft.trim()} onClick={() => saveClients([...(s?.clients ?? []), draft.trim()])}>Allow</button>
+          </div>
+        )}
+      </div>
+    </Section>
+  )
+}
+
+function DestinationInspector({ d, type, canManage, onEdit, onRemove }: {
+  d: Destination; type?: DestinationType; canManage: boolean; onEdit: () => void; onRemove: () => void
+}) {
+  const me = useMe()
+  const syncs = useAsync(() => api.get<Sync[]>('/syncs'), [d.id])
+  const policy = useAsync(() => api.get<Pol>(`/alert-policies/destination/${d.id}`), [d.id])
+  const catalog = useAsync(() => api.get<{ triggers: Trig[] }>('/alerts/catalog'))
+  const mine = (syncs.data ?? []).filter((x) => x.destination_id === d.id)
+  const health = mine.map((x) => syncHealth(x))
+  const failing = health.filter((h) => h.key === 'failing' || h.key === 'warning').length
+  const configured = d.configured !== false
+  const secretKeys = new Set((type?.config_fields ?? []).filter((f) => f.type === 'password' || f.secret).map((f) => f.name))
+  const settings: [ReactNode, ReactNode][] = (type?.config_fields ?? []).map((f) => {
+    const v = d.config?.[f.name]
+    return [f.label, !v ? <span className="faint">{f.required ? 'Missing' : 'Not set'}</span>
+      : secretKeys.has(f.name) ? <span className="badge green"><span className="dot" />Saved</span> : <code>{String(v)}</code>]
+  })
+  return (
+    <Inspector icon={<DestIcon type={d.type} size={44} />} kicker={type?.label ?? d.type} title={d.name}
+      actions={canManage && configured ? <button className="btn sm" onClick={onEdit}>Edit</button> : undefined}
+      sentence={<>{type?.description ?? 'A marketing tool audiences are delivered to.'} <span className="muted">{d.brand_id == null ? 'Shared by every brand.' : `Used by ${me.brandName(d.brand_id)}.`}</span></>}>
+      {!configured && (
+        <div className="sx-callout amber">
+          <div className="grow"><strong>Credentials needed</strong>
+            <div className="small muted">Missing {(d.missing_fields ?? []).join(', ') || 'credentials'}. {mine.length ? `${mine.length} sync${mine.length === 1 ? ' is' : 's are'} ready and start` : 'Syncs start'} as soon as they're added.</div></div>
+          {canManage && <button className="btn sm primary" onClick={onEdit}>Add credentials</button>}
+        </div>
+      )}
+      <div className="cx-stats">
+        <StatTile label="Connection" value={configured ? 'Connected' : 'Not yet'} tone={configured ? 'good' : 'warn'} sub={configured ? 'Credentials saved' : 'Waiting for credentials'} />
+        <StatTile label="Syncs" value={mine.length} sub={mine.length ? (failing ? `${failing} failing` : 'none failing') : 'none yet'} tone={failing ? 'bad' : undefined} />
+      </div>
+      <Section title="Syncs to this destination" aside={mine.length ? <Link className="small" to={`/activations?dest=${d.id}`}>Open list →</Link> : undefined}>
+        {syncs.loading && !syncs.data ? <SkeletonRows rows={2} cols={2} /> : mine.length ? (
+          <div className="dx2-syncs">
+            {mine.slice(0, 6).map((x, i) => (
+              <Link key={x.id} to={`/activations?id=${x.id}`} className="dx2-sync">
+                <span className={`kit-dot ${health[i].tone}`} />
+                <span className="grow" style={{ minWidth: 0 }}><strong>{x.name}</strong><small>{health[i].sentence}</small></span>
+                <span className="dx2-chev" aria-hidden="true">›</span>
+              </Link>
+            ))}
+            {mine.length > 6 && <Link className="small" to={`/activations?dest=${d.id}`}>+{mine.length - 6} more</Link>}
+          </div>
+        ) : <div className="sx-quiet">No syncs send here yet. {me.can('syncs.edit', d.brand_id ?? null) && <Link to="/activations/new">Create one →</Link>}</div>}
+      </Section>
+      <Section title="Alert rules" aside={<Link className="small" to={`/alerts?tab=rules&dest=${d.id}`}>Edit rules →</Link>}>
+        {policy.data && catalog.data ? (
+          <div className="dx2-checks">
+            {catalog.data.triggers.map((t) => {
+              const cfg = policy.data!.triggers[t.key]
+              return (
+                <div key={t.key} className={`dx2-check ${cfg?.enabled ? '' : 'off'}`}>
+                  <span className={`kit-dot ${cfg?.enabled ? (cfg.severity === 'critical' ? 'red' : 'amber') : 'gray'}`} />
+                  <span className="grow">{t.label}</span>
+                  <span className="small muted">{cfg?.enabled ? `${cfg.severity}${thresh(t.key, cfg) ? ` · ${thresh(t.key, cfg)}` : ''}` : 'off'}</span>
+                </div>
+              )
+            })}
+          </div>
+        ) : <SkeletonRows rows={3} cols={2} />}
+      </Section>
+      {d.type === 'gam_kv' && <WebsiteSetup dkey={String(d.config.key || 'mm_aud')} />}
+      {settings.length > 0 && <Section title="Settings"><Facts rows={settings} /></Section>}
+      {canManage && (
+        <div className="sx-actions">
+          <span className="grow" />
+          <button className="btn ghost danger" onClick={onRemove}>Remove destination</button>
+        </div>
+      )}
+    </Inspector>
   )
 }
 
@@ -135,10 +283,11 @@ export default function Destinations() {
   const [status, setStatus] = useUrlState('status', 'all')
   const [kind, setKind] = useUrlState('type')
   const [brand, setBrand] = useUrlState('brand')
+  const [sel, setSel] = useUrlState('id')
 
   const remove = async (d: Destination) => {
     if (!await askConfirm({ title: `Remove “${d.name}”?`, body: 'Its credentials are deleted. A destination used by syncs can’t be removed — delete those syncs first.', confirmLabel: 'Remove destination', danger: true })) return
-    try { await api.del(`/destinations/${d.id}`); dests.reload(); toast(`${d.name} removed`) } catch (e) { toast((e as Error).message, 'error') }
+    try { await api.del(`/destinations/${d.id}`); setSel(''); dests.reload(); toast(`${d.name} removed`) } catch (e) { toast((e as Error).message, 'error') }
   }
   const all = dests.data ?? []
   const canManage = (d: Destination) => (me.can('destinations.manage', d.brand_id ?? null) && d.brand_id != null) || !!me.me?.platform_admin
@@ -149,74 +298,64 @@ export default function Destinations() {
   const kinds = [...new Set(all.map((d) => d.type))]
   const brands = [...new Set(all.map((d) => d.brand_id ?? null))]
   const needs = all.filter((d) => d.configured === false).length
+  const selected = all.find((d) => String(d.id) === sel) ?? rows[0]
+  useEffect(() => { if (!sel && rows[0]) setSel(String(rows[0].id)) }, [sel, rows]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="page wide">
-      <PageHead stage="activation" title="Destinations" subtitle="The marketing tools your audiences are delivered to. Credentials are stored securely and never shown again."
+      <PageHead title="Destinations" subtitle="The marketing tools your audiences are delivered to. Credentials are stored securely and never shown again."
         actions={canAdd ? <button className="btn primary" onClick={() => setModal({})} disabled={!types.data}>+ Add destination</button> : undefined} />
       <ErrorBox error={dests.error || types.error} />
-      {dests.loading && !dests.data ? <SkeletonRows rows={3} cols={3} /> : all.length ? (<>
-        {all.length > 1 && (
-          <Toolbar>
-            {all.length > 4 && <SearchBox value={q} onChange={setQ} placeholder={`Search ${all.length} destinations…`} />}
-            <FilterChips label="Credentials" value={status} onChange={setStatus} options={[
-              { value: 'all', label: 'All', count: all.length },
-              { value: 'ready', label: 'Connected', count: all.length - needs, tone: 'green' },
-              { value: 'needs', label: 'Needs credentials', count: needs, tone: 'amber' },
-            ]} />
-            {kinds.length > 1 && (
-              <select className="input sm act-select" value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Type">
-                <option value="">All types</option>
-                {kinds.map((k) => <option key={k} value={k}>{typeOf(k)?.label ?? k}</option>)}
-              </select>
-            )}
-            {brands.length > 1 && (
-              <select className="input sm act-select" value={brand} onChange={(e) => setBrand(e.target.value)} aria-label="Brand">
-                <option value="">All brands</option>
-                {brands.map((b) => <option key={b ?? 'shared'} value={b ?? 'shared'}>{b == null ? 'Shared' : me.brandName(b)}</option>)}
-              </select>
-            )}
-          </Toolbar>
-        )}
-        <div className="dest-grid">
-          {rows.map((d) => {
-            const t = typeOf(d.type)
-            const configured = d.configured !== false
-            return (
-              <div key={d.id} className={`card dest-card ${configured ? '' : 'needs'}`}>
-                <div className="dest-top">
-                  <DestIcon type={d.type} size={48} />
-                  <div className="grow" style={{ minWidth: 0 }}>
-                    <h2 className="act-ellipsis" title={d.name}>{d.name}</h2>
-                    <div className="small muted act-ellipsis">{t?.label ?? d.type} · {d.brand_id == null ? 'Shared' : me.brandName(d.brand_id)}</div>
-                    <div style={{ marginTop: 6 }}>{configured ? <span className="badge green"><span className="dot" />Connected</span>
-                      : <span className="badge amber"><span className="dot" />Credentials needed</span>}</div>
-                  </div>
-                </div>
-                <p className="small muted dest-desc">{t?.description}</p>
-                {!configured && (
-                  <div className="dest-missing small">
-                    Missing: {(d.missing_fields ?? []).join(', ') || 'credentials'}. Its syncs are ready and start as soon as these are added.
-                  </div>
+      {dests.loading && !dests.data ? <SkeletonRows rows={3} cols={3} /> : all.length ? (
+        <CollectionLayout
+          list={
+            <ListPane title="Connected tools" count={all.length}
+              toolbar={<>
+                {all.length > 4 && <SearchBox value={q} onChange={setQ} placeholder={`Search ${all.length} destinations…`} />}
+                <FilterChips label="Credentials" value={status} onChange={setStatus} options={[
+                  { value: 'all', label: 'All', count: all.length },
+                  { value: 'ready', label: 'Connected', count: all.length - needs, tone: 'green' },
+                  { value: 'needs', label: 'Needs credentials', count: needs, tone: 'amber' },
+                ]} />
+                {kinds.length > 1 && (
+                  <select className="input sm" value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Type">
+                    <option value="">All types</option>
+                    {kinds.map((k) => <option key={k} value={k}>{typeOf(k)?.label ?? k}</option>)}
+                  </select>
                 )}
-                <div className="dest-foot">
-                  <Link to={`/activations?dest=${d.id}`} className="small">{d.sync_count ? `${d.sync_count} sync${d.sync_count === 1 ? '' : 's'} →` : 'No syncs yet'}</Link>
-                  <span className="grow" />
-                  {canManage(d) ? (<>
-                    <button className="btn ghost sm danger" onClick={() => remove(d)}>Remove</button>
-                    <button className={`btn sm ${configured ? '' : 'primary'}`} onClick={() => setModal({ existing: d })}>{configured ? 'Edit' : 'Add credentials'}</button>
-                  </>) : <span className="small faint">View only</span>}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-        {!rows.length && <div className="card"><NoResults what="destinations" onClear={() => { setQ(''); setStatus('all'); setKind(''); setBrand('') }} /></div>}
-      </>) : (
-        <div className="card">
-          <Empty title="No destinations yet" action={canAdd ? <button className="btn primary" onClick={() => setModal({})}>Add destination</button> : undefined}>
-            Connect the tools you market with — Sailthru, Google Ad Manager, Meta and more.
-          </Empty>
+                {brands.length > 1 && (
+                  <select className="input sm" value={brand} onChange={(e) => setBrand(e.target.value)} aria-label="Brand">
+                    <option value="">All brands</option>
+                    {brands.map((b) => <option key={b ?? 'shared'} value={b ?? 'shared'}>{b == null ? 'Shared' : me.brandName(b)}</option>)}
+                  </select>
+                )}
+              </>}>
+              {rows.map((d) => {
+                const configured = d.configured !== false
+                return (
+                  <ListRow key={d.id} selected={selected?.id === d.id} onSelect={() => setSel(String(d.id))}
+                    leading={<DestIcon type={d.type} size={38} />}
+                    title={d.name}
+                    subtitle={`${typeOf(d.type)?.label ?? d.type} · ${d.brand_id == null ? 'Shared' : me.brandName(d.brand_id)}`}
+                    meta={<>
+                      <span className={`dx2-state ${configured ? 'ok' : 'warn'}`}><span className={`kit-dot ${configured ? 'green' : 'amber'}`} />{configured ? 'Connected' : 'Needs credentials'}</span>
+                      <span>{d.sync_count ? `${d.sync_count} sync${d.sync_count === 1 ? '' : 's'}` : 'no syncs'}</span>
+                    </>} />
+                )
+              })}
+              {!rows.length && <NoResults what="destinations" onClear={() => { setQ(''); setStatus('all'); setKind(''); setBrand('') }} />}
+            </ListPane>
+          }
+          inspector={selected
+            ? <DestinationInspector key={selected.id} d={selected} type={typeOf(selected.type)} canManage={canManage(selected)}
+              onEdit={() => setModal({ existing: selected })} onRemove={() => remove(selected)} />
+            : <Inspector empty={<div><strong>No destination selected</strong></div>} />} />
+      ) : (
+        <div className="card dx2-empty">
+          <div className="dx2-empty-logos" aria-hidden="true">{['sailthru', 'gam', 'meta_custom_audience', 'hubspot'].map((t) => <DestIcon key={t} type={t} size={46} />)}</div>
+          <h2>Connect your first marketing tool</h2>
+          <p className="muted">Sailthru, Google Ad Manager, Meta, HubSpot and more. You can add credentials now or later — syncs wait until they're in place.</p>
+          {canAdd && <button className="btn primary" onClick={() => setModal({})} disabled={!types.data}>Add destination</button>}
         </div>
       )}
       {modal && types.data && (

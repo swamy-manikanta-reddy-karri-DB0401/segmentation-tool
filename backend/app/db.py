@@ -189,6 +189,15 @@ CREATE TABLE IF NOT EXISTS alert_events (
     deliveries TEXT NOT NULL DEFAULT '[]',
     run_id INTEGER
 );
+CREATE TABLE IF NOT EXISTS targeting_members (
+    key TEXT NOT NULL,
+    audience_value TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    sync_id INTEGER,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (key, audience_value, user_id)
+);
+CREATE INDEX IF NOT EXISTS targeting_members_user ON targeting_members (user_id);
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     at TEXT NOT NULL,
@@ -250,6 +259,11 @@ class _SQLite:
     def script(self, sql: str) -> None:
         with self.lock:
             self.c.executescript(sql)
+
+    def many(self, sql: str, rows: list[tuple]) -> None:
+        with self.lock:
+            self.c.executemany(sql, rows)
+            self.c.commit()
 
     def columns(self, table: str) -> set[str]:
         with self.lock:
@@ -316,6 +330,10 @@ class _Postgres:
                 row = cur.fetchone()
                 return row["id"] if returning else row
             return None
+
+    def many(self, sql: str, rows: list[tuple]) -> None:
+        with self.pool.connection() as c, c.cursor() as cur:
+            cur.executemany(self._sql(sql, True), rows)
 
     def script(self, sql: str) -> None:
         sql = sql.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY")
@@ -418,6 +436,12 @@ def one(sql: str, args: tuple = ()) -> dict | None:
 
 def execute(sql: str, args: tuple = ()) -> None:
     backend().run(sql, _args(args))
+
+
+def executemany(sql: str, rows: list[tuple]) -> None:
+    """Run one statement for many parameter rows in a single round trip (bulk upserts/deletes)."""
+    if rows:
+        backend().many(sql, [_args(r) for r in rows])
 
 
 def insert(table: str, values: dict) -> int:

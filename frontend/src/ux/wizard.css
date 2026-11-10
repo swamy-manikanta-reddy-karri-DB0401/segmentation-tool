@@ -1,0 +1,75 @@
+/* =====================================================================
+   New / edit sync wizard (refines ux/activate.css)
+   ===================================================================== */
+.wz2-head { margin-bottom: 18px; }
+.wz2-head h1 { font-size: 24px; letter-spacing: -0.02em; }
+.wz2-head p { margin: 6px 0 0; color: var(--text-2); font-size: 14px; max-width: 900px; }
+
+/* stepper: one connected track */
+.wz2-steps { list-style: none; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0 0 20px; padding: 0; border: 1px solid var(--border);
+  border-radius: 14px; background: var(--surface); overflow: hidden; box-shadow: var(--shadow-sm); }
+.wz2-steps li { position: relative; min-width: 0; }
+.wz2-steps li + li { border-left: 1px solid var(--border); }
+.wz2-steps li::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: transparent; }
+.wz2-steps li.active::after { background: var(--brand-fill); }
+.wz2-steps li.done::after { background: color-mix(in srgb, var(--green) 55%, transparent); }
+.wz2-steps button { all: unset; box-sizing: border-box; width: 100%; display: flex; align-items: center; gap: 12px; padding: 14px 16px; color: var(--text-3); }
+.wz2-steps button:not(:disabled) { cursor: pointer; }
+.wz2-steps button:not(:disabled):hover { background: var(--surface-2); }
+.wz2-steps button:focus-visible { box-shadow: inset var(--focus); }
+.wz2-steps .n { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; flex: none; font-size: 12.5px; font-weight: 700;
+  background: var(--surface-3); color: var(--text-2); }
+.wz2-steps li.active .n { background: var(--brand-fill); color: #fff; box-shadow: 0 0 0 4px var(--brand-soft); }
+.wz2-steps li.done .n { background: var(--green-soft); color: var(--green); }
+.wz2-step-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.wz2-step-text strong { font-size: 13.5px; font-weight: 600; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wz2-step-text small { font-size: 11.5px; color: var(--text-3); }
+.wz2-steps li.active .wz2-step-text strong { color: var(--text); }
+
+/* fields to send */
+.wz2-fields { padding: 0; overflow: hidden; }
+.wz2-fields-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 18px 20px 12px; }
+.wz2-fields-head h2 { font-size: 15px; margin-bottom: 3px; }
+.wz2-required { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 0 20px 12px; font-size: 12px; color: var(--text-3); }
+.wz2-req-chip { font-weight: 600; padding: 2px 9px; border-radius: 999px; background: var(--amber-soft); color: var(--amber); }
+.wz2-req-chip.ok { background: var(--green-soft); color: var(--green); }
+.wz2-map-cols, .wz2-map { display: grid; grid-template-columns: minmax(0, 1.5fr) 18px minmax(0, 1fr) 172px; align-items: center; gap: 10px; }
+.wz2-map-cols { padding: 8px 20px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--surface-2);
+  font-size: 10.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text-3); }
+.wz2-map-list { display: flex; flex-direction: column; }
+.wz2-map { padding: 10px 20px; border-top: 1px solid var(--border); }
+.wz2-map:first-child { border-top: 0; }
+.wz2-map.is-unfilled { background: color-mix(in srgb, var(--amber-soft) 40%, transparent); }
+.wz2-map-from { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 8px; align-items: center; min-width: 0; }
+.wz2-kind { color: var(--text-2); }
+.wz2-map-value { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.wz2-map-value .input { flex: 1; min-width: 0; }
+.wz2-arrow { text-align: center; color: var(--text-3); font-size: 16px; }
+.wz2-map-to { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.wz2-map-to .input { flex: 1; min-width: 0; }
+.wz2-req { flex: none; font-size: 10.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--amber); }
+.wz2-map-end { display: flex; align-items: center; gap: 4px; }
+.wz2-map-end .input { flex: 1; min-width: 0; }
+.wz2-none { padding: 18px 20px; color: var(--text-3); font-size: 13px; border-top: 1px solid var(--border); }
+.wz2-fields-foot { padding: 10px 14px 14px; border-top: 1px solid var(--border); }
+
+/* schedule preview + alerting note */
+.wz2-sched, .wz2-alerting { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface-2); }
+.wz2-sched { border-color: color-mix(in srgb, var(--brand-fill) 30%, var(--border)); background: var(--brand-soft-2); }
+.wz2-sched.manual { border-color: var(--border); background: var(--surface-2); }
+.wz2-sched-icon, .wz2-bell { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; flex: none; font-size: 14px; background: var(--surface); border: 1px solid var(--border); color: var(--brand); }
+.wz2-sched strong, .wz2-alerting strong { display: block; font-size: 13.5px; }
+.wz2-sched small, .wz2-alerting small { display: block; font-size: 12.5px; color: var(--text-2); margin-top: 2px; line-height: 1.45; }
+
+/* summary rail */
+.wz2-sum-fields { display: flex; flex-wrap: wrap; gap: 4px; }
+.wz2-sum-fields code { font-family: var(--mono); font-size: 11px; padding: 1px 6px; border-radius: 5px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); }
+.wz-summary { box-shadow: var(--shadow); }
+
+@media (max-width: 1000px) {
+  .wz2-steps { grid-template-columns: 1fr; }
+  .wz2-steps li + li { border-left: 0; border-top: 1px solid var(--border); }
+  .wz2-map-cols { display: none; }
+  .wz2-map { grid-template-columns: 1fr; gap: 8px; }
+  .wz2-arrow { display: none; }
+}

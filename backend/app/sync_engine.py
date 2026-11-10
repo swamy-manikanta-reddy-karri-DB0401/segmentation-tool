@@ -56,8 +56,10 @@ def normalize_config(cfg: dict, dest_cls) -> dict:
         behavior = behavior or ("remove" if mode == "mirror" else "do_nothing")
         mode = None
     mode = mode if mode in st.modes else st.modes[0]
-    if st.source == "events" or behavior not in st.delete_behaviors:
+    if st.source == "events":
         behavior = "do_nothing"
+    elif behavior not in st.delete_behaviors:
+        behavior = st.default_delete if st.default_delete in st.delete_behaviors else "do_nothing"
     options = {o.name: o.default for o in st.options if o.default is not None}
     options.update({k: v for k, v in (cfg.get("options") or {}).items() if v not in (None, "")})
     return {**cfg, "sync_type": st.name, "mode": mode, "delete_behavior": behavior, "options": options,

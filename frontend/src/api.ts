@@ -211,6 +211,7 @@ export interface SyncTypeDef {
   delete_behaviors: Record<string, string>
   options: ConfigField[]
   source: 'audience' | 'events'
+  default_delete?: string
 }
 
 export interface DestinationType {

@@ -2,12 +2,14 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, fmt } from '../api'
-import type { Audience, ConfigField, Destination, DestinationType, Mapping, Schedule, Schema, Sync, SyncConfig, SyncTemplate, SyncTypeDef } from '../api'
+import type { Audience, ColumnType, ConfigField, Destination, DestinationType, Mapping, Schedule, Schema, Sync, SyncConfig, SyncTemplate, SyncTypeDef } from '../api'
 import ScheduleEditor, { fromApi, scheduleLabel, toApi } from '../components/ScheduleEditor'
 import { DestIcon, Empty, ErrorBox, Field, Spinner, Toggle, useAsync } from '../components/ui'
 import { useMe } from '../components/me'
 import { matches, Pager, SearchBox, toast, usePaged } from '../components/kit'
+import { TypeIcon } from '../components/builder/ConditionEditor'
 import '../ux/activate.css'
+import '../ux/wizard.css'
 
 const MODE_INFO: Record<string, string> = {
   upsert: 'Update existing records and insert new ones',
@@ -19,6 +21,12 @@ const SYNONYMS: Record<string, string[]> = {
   email: ['email', 'emailaddress', 'mail'], phone: ['phone', 'phonenumber', 'mobile'],
   firstname: ['firstname', 'givenname', 'fname'], lastname: ['lastname', 'surname', 'familyname'],
   company: ['company', 'companyname'], country: ['country', 'countrycode'], city: ['city'],
+}
+
+/** Every required destination field gets a row up front, so people only have to pick the column. */
+function withRequired(mapping: Mapping[], t: SyncTypeDef): Mapping[] {
+  const missing = t.target_fields.filter((f) => f.required && !mapping.some((m) => m.target === f.name))
+  return [...missing.map((f) => ({ source: '', target: f.name })), ...mapping]
 }
 
 /** Suggest mappings: pair columns and destination fields with similar names. */
@@ -83,57 +91,83 @@ const VARIABLES = [
   { value: 'current-timestamp', label: 'Current timestamp' }, { value: 'sync-id', label: 'Sync ID' }, { value: 'sync-run-id', label: 'Sync run ID' },
 ]
 
-function MappingRow({ m, columns, labels, st, onChange, onRemove }: {
-  m: Mapping; columns: string[]; labels: Record<string, string>; st: SyncTypeDef; onChange: (m: Mapping) => void; onRemove: () => void
+const KIND_LABEL: Record<string, string> = { column: 'Column', static: 'Fixed value', variable: 'Variable', template: 'Template' }
+
+function MappingRow({ m, columns, labels, typeOf, st, required, onChange, onRemove }: {
+  m: Mapping; columns: string[]; labels: Record<string, string>; typeOf: (c: string) => ColumnType | undefined; st: SyncTypeDef
+  required: boolean; onChange: (m: Mapping) => void; onRemove: () => void
 }) {
   const kind = m.type ?? 'column'
+  const t = kind === 'column' && m.source ? typeOf(m.source) : undefined
+  const empty = kind === 'column' ? !m.source : kind === 'variable' ? !m.variable : kind === 'template' ? !m.template : false
   return (
-    <div className="mapping-row">
-      <select className="input sm" value={kind} style={{ width: 120 }} onChange={(e) => onChange({ target: m.target, type: e.target.value as Mapping['type'], null_behavior: m.null_behavior })}>
-        <option value="column">Column</option><option value="static">Static value</option>
-        <option value="variable">Variable</option><option value="template">Template</option>
-      </select>
-      <div className="grow">
-        {kind === 'column' && (
-          <select className="input" value={m.source ?? ''} onChange={(e) => onChange({ ...m, source: e.target.value })}>
-            <option value="">Choose column…</option>
-            {columns.map((c) => <option key={c} value={c}>{labels[c] ?? c}</option>)}
-          </select>
-        )}
-        {kind === 'static' && (
-          <div className="row">
-            <select className="input sm" value={m.value_type ?? 'string'} onChange={(e) => onChange({ ...m, value_type: e.target.value as Mapping['value_type'] })}>
-              <option value="string">String</option><option value="number">Number</option><option value="boolean">Boolean</option><option value="null">Null</option>
-            </select>
-            {m.value_type !== 'null' && <input className="input grow" value={m.value ?? ''} placeholder="value" onChange={(e) => onChange({ ...m, value: e.target.value })} />}
-          </div>
-        )}
-        {kind === 'variable' && (
-          <select className="input" value={m.variable ?? ''} onChange={(e) => onChange({ ...m, variable: e.target.value })}>
-            <option value="">Choose variable…</option>
-            {VARIABLES.map((v) => <option key={v.value} value={v.value}>{v.label}</option>)}
-          </select>
-        )}
-        {kind === 'template' && (
-          <input className="input mono" value={m.template ?? ''} placeholder="{{ row.first_name | capitalize }}" onChange={(e) => onChange({ ...m, template: e.target.value })}
-            title="Liquid template. Columns: row.column_name. Filters include sha256, md5, cast, regex_replace, to_unix, to_date, validate_email." />
-        )}
-      </div>
-      <span className="faint">→</span>
-      {st.custom_fields ? (<>
-        <input className="input" style={{ width: 200 }} list={'targets-' + st.name} value={m.target} placeholder="field name" onChange={(e) => onChange({ ...m, target: e.target.value })} />
-        <datalist id={'targets-' + st.name}>{st.target_fields.map((t) => <option key={t.name} value={t.name}>{t.label}</option>)}</datalist>
-      </>) : (
-        <select className="input" style={{ width: 200 }} value={m.target} onChange={(e) => onChange({ ...m, target: e.target.value })}>
-          <option value="">Choose…</option>
-          {st.target_fields.map((t) => <option key={t.name} value={t.name}>{t.label}{t.required ? ' *' : ''}</option>)}
+    <div className={`wz2-map ${empty ? 'is-unfilled' : ''}`}>
+      <div className="wz2-map-from">
+        <select className="input sm wz2-kind" value={kind} aria-label="Value comes from" onChange={(e) => onChange({ target: m.target, type: e.target.value as Mapping['type'], null_behavior: m.null_behavior })}>
+          {Object.entries(KIND_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
         </select>
-      )}
-      <select className="input sm" style={{ width: 132 }} value={m.null_behavior ?? 'always'} title="What to do when the value is empty"
-        onChange={(e) => onChange({ ...m, null_behavior: e.target.value as Mapping['null_behavior'] })}>
-        <option value="always">Always sync</option><option value="skip_nulls">Skip nulls</option>
-      </select>
-      <button className="btn ghost icon sm" onClick={onRemove} aria-label="Remove">✕</button>
+        <div className="wz2-map-value">
+          {kind === 'column' && (<>
+            {t && <TypeIcon type={t} />}
+            <select className={`input ${!m.source ? 'wz-invalid' : ''}`} value={m.source ?? ''} onChange={(e) => onChange({ ...m, source: e.target.value })} aria-label="Column">
+              <option value="">Choose a column…</option>
+              {columns.map((c) => <option key={c} value={c}>{labels[c] ?? c}</option>)}
+            </select>
+          </>)}
+          {kind === 'static' && (<>
+            <select className="input sm" style={{ width: 104 }} value={m.value_type ?? 'string'} onChange={(e) => onChange({ ...m, value_type: e.target.value as Mapping['value_type'] })} aria-label="Value type">
+              <option value="string">Text</option><option value="number">Number</option><option value="boolean">Yes / no</option><option value="null">Empty</option>
+            </select>
+            {m.value_type !== 'null' && <input className="input" value={m.value ?? ''} placeholder="Value sent for everyone" onChange={(e) => onChange({ ...m, value: e.target.value })} />}
+          </>)}
+          {kind === 'variable' && (
+            <select className={`input ${!m.variable ? 'wz-invalid' : ''}`} value={m.variable ?? ''} onChange={(e) => onChange({ ...m, variable: e.target.value })} aria-label="Variable">
+              <option value="">Choose a variable…</option>
+              {VARIABLES.map((v) => <option key={v.value} value={v.value}>{v.label}</option>)}
+            </select>
+          )}
+          {kind === 'template' && (
+            <input className="input mono" value={m.template ?? ''} placeholder="{{ row.first_name | capitalize }}" onChange={(e) => onChange({ ...m, template: e.target.value })}
+              title="Liquid template. Columns: row.column_name. Filters include sha256, md5, cast, regex_replace, to_unix, to_date, validate_email." aria-label="Template" />
+          )}
+        </div>
+      </div>
+      <span className="wz2-arrow" aria-hidden="true">→</span>
+      <div className="wz2-map-to">
+        {st.custom_fields ? (<>
+          <input className={`input ${!m.target ? 'wz-invalid' : ''}`} list={'targets-' + st.name} value={m.target} placeholder="Field name" onChange={(e) => onChange({ ...m, target: e.target.value })} aria-label="Destination field" />
+          <datalist id={'targets-' + st.name}>{st.target_fields.map((tf) => <option key={tf.name} value={tf.name}>{tf.label}</option>)}</datalist>
+        </>) : (
+          <select className={`input ${!m.target ? 'wz-invalid' : ''}`} value={m.target} onChange={(e) => onChange({ ...m, target: e.target.value })} aria-label="Destination field">
+            <option value="">Choose a field…</option>
+            {st.target_fields.map((tf) => <option key={tf.name} value={tf.name}>{tf.label}{tf.required ? ' (required)' : ''}</option>)}
+          </select>
+        )}
+        {required && <span className="wz2-req" title="The destination needs this field">Required</span>}
+      </div>
+      <div className="wz2-map-end">
+        <select className="input sm" value={m.null_behavior ?? 'always'} title="What to send when the value is empty" aria-label="When empty"
+          onChange={(e) => onChange({ ...m, null_behavior: e.target.value as Mapping['null_behavior'] })}>
+          <option value="always">Send blanks</option><option value="skip_nulls">Skip blanks</option>
+        </select>
+        <button className="btn ghost icon sm" onClick={onRemove} aria-label="Remove field" title="Remove field">✕</button>
+      </div>
+    </div>
+  )
+}
+
+/** "Every day at 09:00 (Asia/Calcutta)" plus when it would run next, in the viewer's own time. */
+function SchedulePreview({ schedule }: { schedule: Schedule }) {
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const text = scheduleLabel(toApi(schedule))
+  const manual = schedule.type === 'manual'
+  return (
+    <div className={`wz2-sched ${manual ? 'manual' : ''}`} role="status">
+      <span className="wz2-sched-icon" aria-hidden="true">{manual ? '▶' : '⟳'}</span>
+      <div>
+        <strong>{manual ? 'Runs only when someone clicks “Run now”' : `${text}${schedule.type === 'recurrence' ? ' your time' : ''}`}</strong>
+        <small>{manual ? 'Good for one-off sends and testing.' : schedule.type === 'cron' ? 'Cron schedules run in UTC.' : schedule.type === 'recurrence' ? `Times are in ${tz}; each run sends only what changed since the last one.` : 'Each run sends only what changed since the last one.'}</small>
+      </div>
     </div>
   )
 }
@@ -197,6 +231,14 @@ export default function ActivationNew() {
     return { columns: [...ev, ...parentCols.map((c) => 'customer.' + c)], labels: lbl }
   }, [parent, st, eventModel, schema.data])
 
+  const typeOf = useMemo(() => {
+    const t: Record<string, ColumnType> = {}
+    for (const c of parent?.columns ?? []) { t[c.name] = c.type; t['customer.' + c.name] = c.type }
+    for (const v of schema.data?.virtual_columns ?? []) { t[v.name] = v.type; t['customer.' + v.name] = v.type }
+    for (const c of eventModel?.columns ?? []) t[c.name] = c.type
+    return (c: string) => t[c]
+  }, [parent, schema.data, eventModel])
+
   const set = (patch: Partial<SyncConfig>) => setCfg((c) => ({ ...c, ...patch }))
 
   /** Reset type-specific settings when the sync type changes. */
@@ -209,8 +251,8 @@ export default function ActivationNew() {
     setCfg({
       sync_type: t.name, mode: t.modes[0], model_id: model?.id,
       match: ident ? { field: ident.name, source: ident.name === 'email' ? emailCol ?? '' : '' } : undefined,
-      mapping: t.target_fields.length ? suggest(cols, t.target_fields) : cols.filter((c) => /name|country|email/i.test(c)).slice(0, 3).map((c) => ({ source: c, target: c.replace(/^customer\./, '') })),
-      delete_behavior: Object.keys(t.delete_behaviors)[0] ?? 'do_nothing',
+      mapping: withRequired(t.target_fields.length ? suggest(cols, t.target_fields) : cols.filter((c) => /name|country|email/i.test(c)).slice(0, 3).map((c) => ({ source: c, target: c.replace(/^customer\./, '') })), t),
+      delete_behavior: t.default_delete && t.delete_behaviors[t.default_delete] ? t.default_delete : Object.keys(t.delete_behaviors)[0] ?? 'do_nothing',
       options: Object.fromEntries(t.options.filter((o) => o.default != null).map((o) => [o.name, o.default as string])),
     })
   }
@@ -257,6 +299,7 @@ export default function ActivationNew() {
   const visibleOptions = st?.options.filter((o) => !o.modes.length || o.modes.includes(cfg.mode)) ?? []
   const requiredOptions = visibleOptions.filter((o) => o.required && !cfg.options[o.name])
   const STEPS = ['Audience & destination', 'What to send', 'Name & schedule']
+  const STEP_HINTS = ['Who, and to which tool', 'Matching and fields', 'When it runs']
   // In-place reasons why the user can't continue yet.
   const step1Problems = [!audienceId && 'Choose an audience', !destId && 'Choose a destination'].filter(Boolean) as string[]
   const step2Problems = [
@@ -270,18 +313,19 @@ export default function ActivationNew() {
   return (
     <div className="page wide">
       <div className="act-crumbs"><Link to="/activations">Syncs</Link><span>/</span><span>{editId ? 'Edit sync' : 'New sync'}</span></div>
-      <div className="act-head" style={{ marginBottom: 18 }}>
-        <div><h1>{editId ? `Edit “${name || 'sync'}”` : 'New sync'}</h1>
-          <p className="small muted" style={{ margin: '4px 0 0' }}>Send an audience to a marketing tool and keep it up to date automatically.</p></div>
-      </div>
-      <ol className="wz-steps">
+      <header className="wz2-head">
+        <h1>{editId ? `Edit “${name || 'sync'}”` : 'New sync'}</h1>
+        <p>Send an audience to a marketing tool and keep it up to date — every run sends only who joined, changed or left.</p>
+      </header>
+      <ol className="wz2-steps" aria-label="Steps">
         {STEPS.map((label, i) => {
           const n = i + 1
           const state = step === n ? 'active' : step > n ? 'done' : ''
           return (
-            <li key={label} className={state}>
+            <li key={label} className={state} aria-current={step === n ? 'step' : undefined}>
               <button disabled={n === step || !canReach(n) || (n > step && n - step > 1)} onClick={() => go(n)}>
-                <span className="n">{step > n ? '✓' : n}</span>{label}
+                <span className="n">{step > n ? '✓' : n}</span>
+                <span className="wz2-step-text"><strong>{label}</strong><small>{STEP_HINTS[i]}</small></span>
               </button>
             </li>
           )
@@ -366,21 +410,36 @@ export default function ActivationNew() {
                 ))}
               </div>
 
-              <div className="card card-body stack">
-                <div className="spread">
+              <div className="card wz2-fields">
+                <div className="wz2-fields-head">
                   <div>
                     <h2>Fields to send</h2>
-                    <div className="small muted">Choose which columns populate which {dest?.name} fields.{st.custom_fields && ' Type a new field name to create a custom field.'}</div>
+                    <div className="small muted">What each {dest?.name} field is filled with.{st.custom_fields && ' Type a new field name to create a custom field.'}</div>
                   </div>
                   {st.target_fields.length > 0 && <button className="btn sm" onClick={() => { set({ mapping: [...cfg.mapping.filter((m) => !suggest(columns, st.target_fields).some((x) => x.target === m.target)), ...suggest(columns, st.target_fields)] }); toast('Suggested mappings added', 'info') }}>Suggest mappings</button>}
                 </div>
-                {cfg.mapping.map((m, i) => (
-                  <MappingRow key={i} m={m} columns={columns} labels={labels} st={st}
-                    onChange={(x) => set({ mapping: cfg.mapping.map((y, j) => (j === i ? x : y)) })}
-                    onRemove={() => set({ mapping: cfg.mapping.filter((_, j) => j !== i) })} />
-                ))}
-                {!cfg.mapping.length && <div className="small muted">No fields mapped yet — only the matching identifier will be sent.</div>}
-                <div><button className="btn ghost sm" onClick={() => set({ mapping: [...cfg.mapping, { source: '', target: '' }] })}>+ Add field</button></div>
+                {(st.target_fields.some((t) => t.required)) && (
+                  <div className="wz2-required" aria-label="Required fields">
+                    <span>Required by {dest?.name}:</span>
+                    {st.target_fields.filter((t) => t.required).map((t) => {
+                      const ok = cfg.mapping.some((m) => m.target === t.name && (m.source || m.type && m.type !== 'column'))
+                      return <span key={t.name} className={`wz2-req-chip ${ok ? 'ok' : ''}`}>{ok ? '✓' : '○'} {t.label}</span>
+                    })}
+                  </div>
+                )}
+                {cfg.mapping.length > 0 && (
+                  <div className="wz2-map-cols" aria-hidden="true"><span>From your data</span><span /><span>To {dest?.name}</span><span>When empty</span></div>
+                )}
+                <div className="wz2-map-list">
+                  {cfg.mapping.map((m, i) => (
+                    <MappingRow key={i} m={m} columns={columns} labels={labels} typeOf={typeOf} st={st}
+                      required={!!st.target_fields.find((t) => t.name === m.target)?.required}
+                      onChange={(x) => set({ mapping: cfg.mapping.map((y, j) => (j === i ? x : y)) })}
+                      onRemove={() => set({ mapping: cfg.mapping.filter((_, j) => j !== i) })} />
+                  ))}
+                </div>
+                {!cfg.mapping.length && <div className="wz2-none">No fields yet — only the matching identifier will be sent. Add the fields your campaigns use, like first name or favourite section.</div>}
+                <div className="wz2-fields-foot"><button className="btn ghost sm" onClick={() => set({ mapping: [...cfg.mapping, { source: '', target: '' }] })}>+ Add field</button></div>
               </div>
 
               <ErrorBox error={error} />
@@ -416,20 +475,16 @@ export default function ActivationNew() {
                 </Field>
               )}
               <ScheduleEditor value={schedule} onChange={setSchedule} />
+              <SchedulePreview schedule={schedule} />
+              <div className="wz2-alerting">
+                <span className="wz2-bell" aria-hidden="true">🔔</span>
+                <div><strong>Alerts are on</strong>
+                  <small>Failed runs, rejected records and stalled deliveries are watched using {dest?.name ?? 'the destination'}’s alert rules. You can fine-tune them on the sync page after saving, or under <Link to="/alerts?tab=rules">Alerts → Rules</Link>.</small></div>
+              </div>
               <details className="wz-more">
-                <summary>Alerts and templates</summary>
+                <summary>Save as a template</summary>
                 <div className="stack" style={{ gap: 14, marginTop: 12 }}>
-                  <Field label="Alerts" help="Post to a Slack (or any) incoming-webhook URL when a run fails or rejects rows.">
-                    <input className="input" placeholder="https://hooks.slack.com/services/…" value={cfg.alerts?.webhook_url ?? ''}
-                      onChange={(e) => set({ alerts: { on_failure: true, on_rejected: true, ...cfg.alerts, webhook_url: e.target.value } })} />
-                    {cfg.alerts?.webhook_url && (
-                      <div className="row small">
-                        <label className="row"><input type="checkbox" checked={cfg.alerts.on_failure !== false} onChange={(e) => set({ alerts: { ...cfg.alerts, on_failure: e.target.checked } })} /> Run fails</label>
-                        <label className="row"><input type="checkbox" checked={cfg.alerts.on_rejected !== false} onChange={(e) => set({ alerts: { ...cfg.alerts, on_rejected: e.target.checked } })} /> Rows rejected</label>
-                      </div>
-                    )}
-                  </Field>
-                  <Field label="Save as a template" help="Reuse this configuration for other audiences sent to the same destination.">
+                  <Field label="Template name" help="Reuse this configuration for other audiences sent to the same destination.">
                     <div className="row">
                       <input className="input" style={{ maxWidth: 260 }} placeholder="Template name" value={templateName} onChange={(e) => { setTemplateName(e.target.value); setTemplateSaved(false) }} />
                       <button className="btn sm" disabled={!templateName.trim()} onClick={saveTemplate}>{templateSaved ? 'Saved ✓' : 'Save template'}</button>
@@ -464,7 +519,14 @@ export default function ActivationNew() {
           <SummaryRow k="Destination" v={dest ? dest.name : null} icon={dest ? <DestIcon type={dest.type} size={20} /> : undefined}
             sub={dest?.configured === false ? 'Credentials needed' : dtype?.label} warn={dest?.configured === false} />
           {step >= 2 && st && <SummaryRow k="Sending" v={`${st.label} · ${cfg.mode ? cfg.mode[0].toUpperCase() + cfg.mode.slice(1) : ''}`}
-            sub={cfg.mapping.filter((m) => m.target).length ? `${cfg.mapping.filter((m) => m.target).length} field${cfg.mapping.filter((m) => m.target).length === 1 ? '' : 's'}` : undefined} />}
+            sub={cfg.match?.source ? `Matched on ${labels[cfg.match.source] ?? cfg.match.source}` : undefined} />}
+          {step >= 2 && cfg.mapping.some((m) => m.target) && (
+            <div className="wz-sum-row">
+              <span>Fields</span>
+              <div className="wz2-sum-fields">{cfg.mapping.filter((m) => m.target).slice(0, 8).map((m) => <code key={m.target}>{m.target}</code>)}
+                {cfg.mapping.filter((m) => m.target).length > 8 && <small>+{cfg.mapping.filter((m) => m.target).length - 8} more</small>}</div>
+            </div>
+          )}
           {step >= 3 && <SummaryRow k="Schedule" v={scheduleLabel(toApi(schedule))} />}
           <div className={`wz-approval ${needsApproval ? 'amber' : 'green'}`}>
             {needsApproval ? 'Needs approval by a Brand Marketing Admin before it runs' : 'You can publish this directly'}

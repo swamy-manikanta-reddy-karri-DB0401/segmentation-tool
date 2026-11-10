@@ -59,7 +59,7 @@ def parse_service_account(raw: str) -> dict:
 
 class GoogleAdManager(Destination):
     type = "gam"
-    label = "Google Ad Manager 360"
+    label = "Google Ad Manager — audience segments (360)"
     description = ("Add and remove people in Ad Manager first-party audience segments by uploading identifier "
                    "files (PPID or device IDs) to your network's Cloud Storage bucket.")
     category = "Advertising"

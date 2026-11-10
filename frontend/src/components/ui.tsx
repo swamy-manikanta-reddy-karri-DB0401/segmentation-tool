@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { BrandLogo } from './logos'
 
 export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []) {
   const [data, setData] = useState<T | undefined>()
@@ -127,23 +128,9 @@ export function Toggle<T extends string>({ value, options, onChange }: {
   )
 }
 
-const ICON_COLORS: Record<string, [string, string]> = {
-  webhook: ['var(--blue-soft)', 'var(--blue)'],
-  csv: ['var(--green-soft)', 'var(--green)'],
-  hubspot: ['var(--amber-soft)', 'var(--amber)'],
-  gam: ['var(--blue-soft)', 'var(--blue)'],
-  meta_custom_audience: ['var(--violet-soft)', 'var(--violet)'],
-  sailthru: ['linear-gradient(135deg, #00B5B0, #058EA8)', '#fff'],
-}
-const ICON_TEXT: Record<string, string> = { webhook: '{ }', csv: 'CSV', hubspot: 'HS', meta_custom_audience: 'M', sailthru: 'ST', gam: 'GAM' }
 
 export function DestIcon({ type, size = 34 }: { type: string; size?: number }) {
-  const [bg, fg] = ICON_COLORS[type] ?? ['var(--surface-2)', 'var(--text-2)']
-  return (
-    <div className="tile-icon" style={{ background: bg, color: fg, width: size, height: size, fontSize: size < 30 ? 10 : size > 40 ? 15 : 12, borderRadius: size > 40 ? 12 : undefined }}>
-      {ICON_TEXT[type] ?? type.slice(0, 2).toUpperCase()}
-    </div>
-  )
+  return <BrandLogo type={type} size={size} />
 }
 
 export const STAGES = {

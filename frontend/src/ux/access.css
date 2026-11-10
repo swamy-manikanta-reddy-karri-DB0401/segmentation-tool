@@ -1,0 +1,108 @@
+/* =====================================================================
+   Access: people & roles, brands, activity
+   ===================================================================== */
+.ac-tabs { margin-bottom: 18px; }
+.ac-select { max-width: 190px; }
+
+/* principal icons */
+.ac-icon { display: inline-grid; place-items: center; flex: none; border-radius: 50%; font-weight: 700; letter-spacing: .02em; }
+.ac-icon.user { color: #fff; background: linear-gradient(135deg, var(--brand-fill), var(--teal-deep)); }
+.ac-icon.group { border-radius: 10px; color: var(--violet); background: var(--violet-soft); border: 1px solid color-mix(in srgb, var(--violet) 25%, var(--border)); }
+
+/* role chips */
+.ac-role { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap;
+  color: var(--tone); background: color-mix(in srgb, var(--tone) 12%, transparent); border: 1px solid color-mix(in srgb, var(--tone) 22%, transparent); }
+.ac-role.violet { --tone: var(--violet); } .ac-role.brand { --tone: var(--brand); } .ac-role.blue { --tone: var(--blue); }
+.ac-role.amber { --tone: var(--amber); } .ac-role.gray { --tone: var(--text-2); }
+.ac-row-roles { display: inline-flex; gap: 4px; align-items: center; flex-wrap: nowrap; }
+.ac-more { font-size: 11px; font-weight: 600; color: var(--text-3); }
+.ac-tag { font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--violet); padding: 0 6px; border-radius: 4px; background: var(--violet-soft); }
+
+/* inspector */
+.ac-note { padding: 10px 12px; border-radius: 10px; background: var(--blue-soft); color: var(--text-2); font-size: 12.5px; border: 1px solid color-mix(in srgb, var(--blue) 20%, transparent); }
+.ac-grant-card { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface); }
+.ac-grant-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.ac-grant-scope { font-size: 14px; font-weight: 650; margin-bottom: 4px; }
+.ac-caps { list-style: none; margin: 0; padding: 10px 14px; display: flex; flex-direction: column; gap: 5px; font-size: 13px; }
+.ac-caps li { display: flex; gap: 8px; align-items: baseline; }
+.ac-caps li span { width: 14px; flex: none; font-weight: 700; text-align: center; }
+.ac-caps li.yes { color: var(--text); }
+.ac-caps li.yes span { color: var(--green); }
+.ac-caps li.no { color: var(--text-3); }
+.ac-caps em { font-style: normal; color: var(--amber); }
+.ac-grant-foot { padding: 8px 14px 10px; font-size: 11.5px; color: var(--text-3); border-top: 1px dashed var(--border); }
+
+/* grant modal */
+.ac-grant { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 22px; align-items: start; }
+.ac-role-pick { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.ac-role-pick legend { font-size: 13px; font-weight: 600; margin-bottom: 6px; padding: 0; }
+.ac-role-card { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); cursor: pointer; background: var(--surface); transition: border-color .12s, background .12s; }
+.ac-role-card:hover { border-color: var(--border-strong); }
+.ac-role-card.on { border-color: var(--brand-fill); background: var(--brand-soft-2); box-shadow: var(--focus); }
+.ac-role-card input { margin-top: 3px; accent-color: var(--brand-fill); }
+.ac-role-card-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ac-role-card-body strong { font-size: 13.5px; }
+.ac-role-card-body small { font-size: 12px; color: var(--text-2); line-height: 1.45; }
+.ac-checks { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
+.ac-checks label { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); font-size: 13px; cursor: pointer; }
+.ac-checks label.on { border-color: var(--brand-fill); background: var(--brand-soft-2); }
+
+/* role matrix */
+.ac-matrix th.c, .ac-matrix td.c { text-align: center; }
+.ac-yes { color: var(--green); font-weight: 800; }
+.ac-no { color: var(--text-3); }
+
+/* brands */
+.ac-bar { display: flex; align-items: center; gap: 10px; }
+.ac-bar .dm-search { max-width: 360px; }
+.ac-brands { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
+.ac-brand { padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+.ac-brand header { display: flex; align-items: center; gap: 12px; padding: 16px 16px 12px; }
+.ac-brand h3 { font-size: 15px; }
+.ac-brand header small { font-size: 12px; color: var(--text-3); display: block; }
+.ac-brand-mark { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; flex: none; font-weight: 800; font-size: 14px; color: var(--brand);
+  background: var(--brand-soft); border: 1px solid color-mix(in srgb, var(--brand-fill) 25%, var(--border)); }
+.ac-brand-stats { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.ac-brand-stats > * { display: flex; flex-direction: column; gap: 1px; padding: 12px 14px; border-left: 1px solid var(--border); min-width: 0; }
+.ac-brand-stats > *:first-child { border-left: 0; }
+.ac-brand-stats strong { font-size: 20px; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.ac-brand-stats span { font-size: 11.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ac-brand-people { border: 0; background: none; text-align: left; cursor: pointer; font: inherit; color: inherit; }
+.ac-brand-people:hover { background: var(--surface-2); }
+.ac-brand-people:hover span { color: var(--brand); }
+.ac-brand footer { display: flex; justify-content: flex-end; gap: 4px; padding: 8px 10px; }
+.ac-brand-new { border: 1.5px dashed var(--border-strong); border-radius: var(--radius); background: transparent; min-height: 190px; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 4px; cursor: pointer; color: var(--text-2); font: inherit; }
+.ac-brand-new:hover { border-color: var(--brand-fill); color: var(--brand); background: var(--brand-soft-2); }
+.ac-brand-new span { font-size: 26px; line-height: 1; color: var(--brand); }
+.ac-brand-new small { font-size: 12px; color: var(--text-3); }
+
+/* activity */
+.ac-activity { padding: 0; overflow: hidden; }
+.ac-activity-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+.ac-activity-tools .dm-search { max-width: 320px; }
+.ac-timeline { padding: 6px 18px 4px; }
+.ac-day { font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text-3); margin: 16px 0 6px; }
+.ac-timeline ol { list-style: none; margin: 0; padding: 0; position: relative; }
+.ac-timeline ol::before { content: ''; position: absolute; left: 5px; top: 8px; bottom: 8px; border-left: 1px solid var(--border); }
+.ac-event { position: relative; display: grid; grid-template-columns: 12px 30px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 8px 0; }
+.ac-dot { width: 11px; height: 11px; border-radius: 50%; background: var(--surface); border: 2px solid var(--text-3); z-index: 1; }
+.ac-dot.green { border-color: var(--green); } .ac-dot.red { border-color: var(--red); } .ac-dot.blue { border-color: var(--blue); } .ac-dot.amber { border-color: var(--amber); }
+.ac-event-avatar { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--text-2); background: var(--surface-3); }
+.ac-event-body { min-width: 0; }
+.ac-event-line { font-size: 13.5px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-event-line b { color: var(--text); font-weight: 600; }
+.ac-event-extra { font-size: 12px; color: var(--text-3); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-event-meta { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text-3); white-space: nowrap; }
+.ac-brand-chip { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--surface-3); color: var(--text-2); }
+.ac-activity-foot { padding: 8px 18px 12px; border-top: 1px solid var(--border); }
+
+@media (max-width: 900px) {
+  .ac-grant { grid-template-columns: 1fr; }
+  .ac-event { grid-template-columns: 12px 30px minmax(0, 1fr); }
+  .ac-event-meta { grid-column: 3; }
+}
+
+.ac-cant { padding: 0 14px 10px; font-size: 12px; color: var(--text-3); line-height: 1.5; }
+.ac-cant span { font-weight: 700; color: var(--text-2); margin-right: 6px; }
+.ac-brand-new { min-height: 150px; }

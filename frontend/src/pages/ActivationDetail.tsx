@@ -11,6 +11,9 @@ import { muteLabel, MuteMenu, RoutingEditor, SeverityBadge, since, TriggerEditor
 import { ErrorLine } from './Alerts'
 import type { AlertRow, AlertStatus, Catalog, Policy, Recipient, TriggerCfg, TriggerKey } from '../components/alerting'
 import { DELETE_LABEL, syncHealth, until } from '../ux/syncHealth'
+import { runBars, runTotals, splitInitialLoad } from '../ux/syncRuns'
+import { RunsChart } from '../components/viz'
+import { Facts } from '../components/collection'
 import '../ux/activate.css'
 import '../ux/alerts.css'
 
@@ -74,7 +77,7 @@ function RunDetail({ runId, onClose }: { runId: number; onClose: () => void }) {
 }
 
 /** Approve, or send back with a reason (maker-checker). */
-function ReviewModal({ sync, mode, onClose, onDone }: { sync: Sync; mode: 'approve' | 'reject'; onClose: () => void; onDone: () => void }) {
+export function ReviewModal({ sync, mode, onClose, onDone }: { sync: Sync; mode: 'approve' | 'reject'; onClose: () => void; onDone: () => void }) {
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -285,6 +288,8 @@ export default function ActivationDetail() {
   const runBlocked = running || waiting || !can.run || !approved
   const runTitle = !approved ? 'Waiting for approval by a Brand Marketing Admin' : !can.run ? "Your role can't run this sync" : waiting ? 'Add destination credentials first' : undefined
   const fields = s.config.mapping.map((m) => m.target).filter(Boolean)
+  const { bars, initial } = splitInitialLoad(runBars(runs.data, 30))
+  const totals = runTotals(runs.data)
 
   // one obvious primary action
   const primary = !approved && can.approve
@@ -357,41 +362,30 @@ export default function ActivationDetail() {
       )}
       <ErrorBox error={error} />
 
-      <div className="act-cards">
-        <div className="card act-card">
-          <div className="act-card-k">Schedule</div>
-          <strong>{scheduleLabel(s.schedule)}</strong>
-          <div className="small muted">{!approved ? 'Starts after approval' : !s.enabled ? 'Paused — runs only when started manually' : s.next_run_at ? <>Next run {until(s.next_run_at)} · <span title={new Date(s.next_run_at).toLocaleString()}>{new Date(s.next_run_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span></> : 'Runs only when started manually'}</div>
+      <div className="card sx-delivery">
+        <div className="sx-delivery-head">
+          <h2>Deliveries</h2>
+          <div className="small muted">Records sent per run — click a bar to open that run.</div>
         </div>
-        <div className="card act-card">
-          <div className="act-card-k">Last run</div>
-          <strong>{last ? `${fmt.num(last.audience_rows)} people` : 'Not run yet'}</strong>
-          <div className="small muted">{last ? <><span style={{ color: 'var(--green)' }}>+{fmt.num(last.added)}</span> · ~{fmt.num(last.changed)} · −{fmt.num(last.removed)}{last.failed ? <> · <span style={{ color: 'var(--red)' }}>{fmt.num(last.failed)} rejected</span></> : null} · {fmt.ago(last.started_at)}</> : 'Run history appears below after the first run'}</div>
-        </div>
-        <div className="card act-card">
-          <div className="act-card-k">How records are sent</div>
-          <strong>{s.config.sync_type === 'default' ? 'Records' : cap(s.config.sync_type.replace('_', ' '))} · {cap(s.config.mode)}</strong>
-          <div className="small muted act-ellipsis">{s.config.match ? `Matched on ${s.config.match.source} → ${s.config.match.field}` : 'Matched on the customer ID'}</div>
-        </div>
-        <div className="card act-card">
-          <div className="act-card-k">When people leave the audience</div>
-          <strong>{DELETE_LABEL[s.config.delete_behavior] ?? s.config.delete_behavior}</strong>
-          <div className="small muted">{s.config.delete_behavior === 'do_nothing' ? 'They stay in the destination' : 'Applied on the next run'}</div>
+        <div className="sx-delivery-body">
+          <div className="sx-delivery-chart">
+            {bars.length ? <RunsChart runs={bars} height={200} onSelect={(rid) => setOpenRun(Number(rid))} />
+              : <div className="sx-quiet" style={{ padding: '22px 0' }}>{!approved ? 'Deliveries appear here once the sync is approved and runs.' : waiting ? 'Deliveries appear here once credentials are added and the first run completes.' : 'No runs yet — the first run sends everyone in the audience.'}</div>}
+            {initial && <div className="sx-note">First run sent everyone — {fmt.num(initial.added + initial.changed + initial.removed)} records on {initial.when}, not drawn so day-to-day changes stay readable. <button className="btn ghost sm" onClick={() => setOpenRun(Number(initial.id))}>Open that run</button></div>}
+          </div>
+          <div className="sx-side">
+            <div><span>Last run</span><strong>{last ? fmt.ago(last.started_at) : '—'}</strong><small>{last ? (last.status === 'failed' ? 'failed' : last.failed ? `${fmt.num(last.failed)} rejected` : 'delivered') : 'not run yet'}</small></div>
+            <div><span>Next run</span><strong>{!approved ? 'After approval' : !s.enabled ? 'Paused' : s.next_run_at ? until(s.next_run_at) : 'Manual'}</strong><small>{scheduleLabel(s.schedule)}</small></div>
+            <div><span>In audience</span><strong>{last ? fmt.num(last.audience_rows) : '—'}</strong><small>at the last run</small></div>
+            <div><span>Sent so far</span><strong>{fmt.num(totals.sent)}</strong><small>across {totals.count} run{totals.count === 1 ? '' : 's'}</small></div>
+          </div>
         </div>
       </div>
-      {fields.length > 0 && (
-        <div className="act-fields"><span className="small muted">Fields sent</span>{fields.map((f) => <span key={f} className="act-field mono">{f}</span>)}</div>
-      )}
-      {approved && s.approved_by && (
-        <div className="small faint" style={{ marginBottom: 14 }}>
-          Approved by {s.approved_by}{s.approved_at ? ` ${fmt.ago(s.approved_at)}` : ''}{s.review_note ? ` · “${s.review_note}”` : ''}
-        </div>
-      )}
 
       {approved && (s.alert_count ?? 0) > 0 && <SyncAlerts sync={s} canEdit={can.edit || can.approve} canMute={can.run || can.approve} />}
       <div className="card">
         <div className="card-head">
-          <div><h2>Run history</h2><div className="small muted">Each run sends only the people who joined, changed or left. Click a run for details.</div></div>
+          <div><h2>Run history</h2><div className="small muted">Every run, newest first — the table view of the chart above.</div></div>
           {(runs.data?.length ?? 0) > 0 && (
             <FilterChips label="Run status" value={runFilter} onChange={setRunFilter} options={[
               { value: 'all', label: 'All', count: runs.data!.length },
@@ -425,6 +419,20 @@ export default function ActivationDetail() {
         </>) : <div className="empty"><p>{!approved ? 'No runs yet — this sync runs once it is approved.' : waiting ? 'No runs yet — this sync starts once credentials are added.' : can.run ? <>No runs yet. Click <strong>Run now</strong> to send the audience.</> : 'No runs yet.'}</p></div>}
       </div>
       {approved && !(s.alert_count ?? 0) && <SyncAlerts sync={s} canEdit={can.edit || can.approve} canMute={can.run || can.approve} />}
+      <div className="card sx-config">
+        <div className="card-head"><div><h2>Configuration</h2><div className="small muted">What this sync sends and when.</div></div>
+          {can.edit && approved && <Link className="btn ghost sm" to={`/activations/new?edit=${s.id}`}>Edit</Link>}</div>
+        <div className="card-body">
+          <Facts rows={[
+            ['Schedule', <span key="s">{scheduleLabel(s.schedule)}{approved && s.enabled && s.next_run_at ? <span className="muted"> · next {new Date(s.next_run_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span> : null}</span>],
+            ['Sends', `${s.config.sync_type === 'default' ? 'Records' : cap(s.config.sync_type.replace('_', ' '))} · ${cap(s.config.mode)}`],
+            ['Matched on', s.config.match ? <code key="m">{s.config.match.source} → {s.config.match.field}</code> : 'Customer ID'],
+            ['Fields', fields.length ? fields.map((f) => <code key={f}>{f}</code>) : '—'],
+            ['When people leave', <span key="d">{DELETE_LABEL[s.config.delete_behavior] ?? s.config.delete_behavior}<span className="muted"> · {s.config.delete_behavior === 'do_nothing' ? 'they stay in the destination' : 'applied on the next run'}</span></span>],
+            ...(approved && s.approved_by ? [['Approved', `${s.approved_by}${s.approved_at ? ` · ${fmt.ago(s.approved_at)}` : ''}${s.review_note ? ` · “${s.review_note}”` : ''}`] as [string, string]] : []),
+          ]} />
+        </div>
+      </div>
       {openRun && <RunDetail runId={openRun} onClose={() => setOpenRun(null)} />}
       {review && <ReviewModal sync={s} mode={review} onClose={() => setReview(null)} onDone={() => { setReview(null); sync.reload(); toast(review === 'approve' ? 'Sync approved and published' : 'Sent back to the builder') }} />}
     </div>

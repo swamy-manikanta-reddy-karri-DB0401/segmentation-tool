@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { toast } from './kit'
+import { BrandLogo } from './logos'
 
 export type Severity = 'warning' | 'critical'
 export type AlertStatus = 'healthy' | Severity
@@ -83,20 +84,10 @@ export function SeverityBadge({ status, muted }: { status: AlertStatus; muted?: 
   return <span className={`al-sev ${status} ${muted ? 'muted' : ''}`}><span className="al-sev-dot" aria-hidden="true" />{text}</span>
 }
 
-const CH_ICON: Record<Channel, string> = {
-  email: 'M4 6h16v12H4zM4 7l8 6 8-6',
-  slack: 'M9 3a2 2 0 0 0 0 4h2V5a2 2 0 0 0-2-2zM3 9a2 2 0 0 0 2 2h6V9a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2zM15 21a2 2 0 0 0 0-4h-2v2a2 2 0 0 0 2 2zM21 15a2 2 0 0 0-2-2h-6v2a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2zM21 9a2 2 0 1 0-4 0v2h2a2 2 0 0 0 2-2zM3 15a2 2 0 1 0 4 0v-2H5a2 2 0 0 0-2 2z',
-  pagerduty: 'M7 21V3h6a5 5 0 0 1 0 10H7',
-  webhook: 'M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7',
-}
 export const CHANNEL_LABEL: Record<Channel, string> = { email: 'Email', slack: 'Slack', pagerduty: 'PagerDuty', webhook: 'Webhook' }
 
 export function ChannelIcon({ channel, size = 36 }: { channel: Channel; size?: number }) {
-  return (
-    <span className={`al-ch ${channel}`} style={{ width: size, height: size }} aria-label={CHANNEL_LABEL[channel]} role="img">
-      <svg viewBox="0 0 24 24" width={size * 0.5} height={size * 0.5} fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={CH_ICON[channel]} /></svg>
-    </span>
-  )
+  return <span role="img" aria-label={CHANNEL_LABEL[channel]} style={{ display: 'inline-grid' }}><BrandLogo type={channel} size={size} title={CHANNEL_LABEL[channel]} /></span>
 }
 
 /** Mute a trigger for a while; tells the shell to refresh the nav count. */

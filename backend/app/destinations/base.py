@@ -62,6 +62,7 @@ class SyncType:
     delete_behaviors: dict[str, str] = field(default_factory=dict)  # behavior -> description
     options: list[ConfigField] = field(default_factory=list)
     source: str = "audience"  # "audience" (one row per member) or "events" (rows of an event/related model)
+    default_delete: str = "do_nothing"  # used when a sync doesn't choose one
 
 
 MODE_LABELS = {"upsert": "Upsert", "update": "Update", "insert": "Insert", "add": "Add"}

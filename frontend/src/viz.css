@@ -1,0 +1,59 @@
+/* =====================================================================
+   Charts — palette follows the data-viz reference: categorical slots 1–3 for identity,
+   a single teal hue for magnitude, status red only for failures. Light + dark selected separately.
+   ===================================================================== */
+:root { --viz-s1: #2a78d6; --viz-s2: #eb6834; --viz-s3: #1baf7a; --viz-seq: #00a19c; --viz-seq-soft: rgba(0, 161, 156, .14);
+  --viz-fail: #c4314b; --viz-grid: color-mix(in srgb, var(--text-3) 22%, transparent); }
+:root[data-theme="dark"] { --viz-s1: #3987e5; --viz-s2: #d95926; --viz-s3: #199e70; --viz-seq: #2fd0ca; --viz-seq-soft: rgba(47, 208, 202, .16); --viz-fail: #ff7d93; }
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) { --viz-s1: #3987e5; --viz-s2: #d95926; --viz-s3: #199e70; --viz-seq: #2fd0ca; --viz-seq-soft: rgba(47, 208, 202, .16); --viz-fail: #ff7d93; }
+}
+
+.viz { position: relative; width: 100%; }
+.viz-svg { display: block; width: 100%; height: auto; overflow: visible; }
+.viz-grid { stroke: var(--viz-grid); stroke-width: 1; }
+.viz-axis { font: 500 10.5px var(--font); fill: var(--text-3); }
+.viz-bar { transition: opacity .12s; }
+.viz-bar.s1 { fill: var(--viz-s1); } .viz-bar.s2 { fill: var(--viz-s2); } .viz-bar.s3 { fill: var(--viz-s3); }
+.viz-col.dim .viz-bar { opacity: .35; }
+.viz-fail circle { fill: var(--viz-fail); }
+.viz-fail path { stroke: #fff; stroke-width: 1.6; stroke-linecap: round; }
+.viz-legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-2); margin-bottom: 8px; }
+.viz-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.viz-key { width: 10px; height: 10px; border-radius: 3px; display: inline-block; flex: none; }
+.viz-key.s1 { background: var(--viz-s1); } .viz-key.s2 { background: var(--viz-s2); } .viz-key.s3 { background: var(--viz-s3); }
+.viz-key.fail { background: var(--viz-fail); border-radius: 50%; }
+.viz-tip { position: absolute; transform: translateX(-50%); z-index: 5; min-width: 150px; padding: 9px 11px; border-radius: 10px; pointer-events: none;
+  background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-lg); font-size: 12px; color: var(--text); display: flex; flex-direction: column; gap: 3px; }
+.viz-tip strong { font-size: 12.5px; }
+.viz-tip-sub { color: var(--text-3); font-size: 11.5px; margin-bottom: 2px; }
+.viz-tip-row { display: flex; align-items: center; gap: 7px; color: var(--text-2); }
+.viz-tip-row b { margin-left: auto; color: var(--text); font-variant-numeric: tabular-nums; }
+.viz-tip-warn { color: var(--viz-fail); font-weight: 600; }
+
+/* horizontal bars */
+.viz-hbars { display: flex; flex-direction: column; gap: 7px; }
+.viz-hrow { display: grid; grid-template-columns: minmax(0, 38%) minmax(0, 1fr) auto; align-items: center; gap: 10px; font-size: 12.5px; }
+.viz-hlabel { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viz-hlabel em { color: var(--text-3); }
+.viz-htrack { height: 8px; border-radius: 4px; background: var(--surface-3); overflow: hidden; }
+.viz-hfill { display: block; height: 100%; border-radius: 4px; background: var(--viz-seq); }
+.viz-hval { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--text); white-space: nowrap; }
+.viz-hval small { color: var(--text-3); font-weight: 500; }
+
+/* sparkline */
+.viz-spark .viz-svg { height: 44px; }
+.viz-line { fill: none; stroke: var(--viz-seq); stroke-width: 2; }
+.viz-area { fill: var(--viz-seq-soft); }
+.viz-cross { stroke: var(--text-3); stroke-width: 1; stroke-dasharray: 3 3; }
+
+/* funnel */
+.viz-funnel { display: flex; flex-direction: column; gap: 8px; }
+.viz-frow { display: grid; grid-template-columns: minmax(0, 46%) minmax(0, 1fr) 92px; align-items: center; gap: 10px; font-size: 12.5px; }
+.viz-flabel { display: flex; align-items: center; gap: 7px; color: var(--text-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viz-fstep { width: 18px; height: 18px; border-radius: 50%; display: inline-grid; place-items: center; flex: none; font-size: 10px; font-weight: 700; background: var(--surface-3); color: var(--text-2); }
+.viz-ftrack { height: 10px; border-radius: 5px; background: var(--surface-3); overflow: hidden; }
+.viz-ffill { display: block; height: 100%; border-radius: 5px; background: var(--viz-seq); transition: width .3s ease; }
+.viz-frow.base .viz-ffill { background: color-mix(in srgb, var(--viz-seq) 35%, var(--surface-3)); }
+.viz-fval { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; color: var(--text); }
+.viz-fval small { color: var(--text-3); font-weight: 500; }

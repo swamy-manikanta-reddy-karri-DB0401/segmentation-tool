@@ -1,12 +1,17 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { api, fmt } from '../api'
-import type { Audience, Schema, Sync, TimeWindow, Trait, TraitConfig, TraitMethod } from '../api'
+import { api } from '../api'
+import type { Audience, ColumnType, Schema, Sync, TimeWindow, Trait, TraitConfig, TraitMethod } from '../api'
 import { BuilderProvider, filterColumns } from '../components/builder/ConditionEditor'
 import TraitConfigEditor, { METHODS } from '../components/TraitConfigEditor'
 import { Empty, ErrorBox, Field, Modal, PageHead, useAsync } from '../components/ui'
 import { useMe } from '../components/me'
-import { askConfirm, FilterChips, matches, NoResults, Pager, SearchBox, SkeletonRows, SortTh, Toolbar, sortBy, toast, usePaged, useSort, useUrlState } from '../components/kit'
+import { askConfirm, FilterChips, matches, NoResults, Pager, SearchBox, SkeletonRows, sortBy, toast, usePaged, useUrlState } from '../components/kit'
+import { CollectionLayout, Facts, Inspector, ListPane, ListRow, Section, StatTile } from '../components/collection'
+import { TopValues } from '../components/viz'
+import { BrandLogo } from '../components/logos'
+import { Glyph, traitGlyph, useSelected } from '../ux/segment-kit'
 import '../ux/segment.css'
 
 type TraitRow = Trait & { updated_at?: string }
@@ -84,7 +89,7 @@ function TraitModal({ schema, existing, onClose, onSaved }: { schema: Schema; ex
       <div className="seg-trait-summary"><span>In plain words</span><strong>{describeTrait(draft, schema)}</strong></div>
       <ErrorBox error={error} />
       {preview && (
-        <div className="table-wrap" style={{ maxHeight: 260 }}>
+        <div className="table-wrap sg-modal-preview" style={{ maxHeight: 260 }}>
           <table className="table compact">
             <thead><tr><th>{schema.parent!.name}</th><th>Value</th></tr></thead>
             <tbody>{preview.rows.map((r, i) => <tr key={i}><td>{String(r[0])}</td><td className="mono">{r[1] == null ? '—' : String(r[1])}</td></tr>)}</tbody>
@@ -93,6 +98,90 @@ function TraitModal({ schema, existing, onClose, onSaved }: { schema: Schema; ex
         </div>
       )}
     </Modal>
+  )
+}
+
+type Preview = { columns: string[]; rows: unknown[][] }
+
+/** A small sample of real values: a distribution for text, min / average / max for numbers. */
+function SampleValues({ t, schema, type }: { t: Trait; schema: Schema; type: string }) {
+  const [data, setData] = useState<Preview | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => { setData(null); setError(null) }, [t.id])
+  const load = async () => {
+    setBusy(true); setError(null)
+    try { setData(await api.post<Preview>('/traits/preview', { method: t.method, config: t.config, parent_id: schema.parent!.id })) }
+    catch (e) { setError((e as Error).message) } finally { setBusy(false) }
+  }
+  const values = (data?.rows ?? []).map((r) => r[1])
+  const nums = values.map((v) => Number(v)).filter((v) => Number.isFinite(v))
+  const numeric = type === 'number' && nums.length > 0
+  const counts = new Map<string, number>()
+  if (!numeric) for (const v of values) { const k = Array.isArray(v) ? v.join(', ') : String(v); counts.set(k, (counts.get(k) ?? 0) + 1) }
+  const fmtV = (n: number) => (Math.abs(n) >= 100 ? Math.round(n).toLocaleString() : n.toLocaleString(undefined, { maximumFractionDigits: 2 }))
+  const who = schema.parent!.name.toLowerCase()
+  return (
+    <Section title="Sample values" aside={<button className={`btn sm ${data ? 'ghost' : ''}`} onClick={load} disabled={busy}>{busy ? 'Calculating…' : data ? 'Refresh' : 'Calculate sample'}</button>}>
+      <ErrorBox error={error} />
+      {!data ? <div className="sg-hint">Calculates this trait live for up to 20 {who} so you can check the values make sense.</div>
+        : !values.length ? <div className="sg-hint">Nobody has a value for this trait yet.</div>
+          : numeric ? (<>
+            <div className="cx-stats">
+              <StatTile label="Lowest" value={fmtV(Math.min(...nums))} />
+              <StatTile label="Average" value={fmtV(nums.reduce((x, y) => x + y, 0) / nums.length)} />
+              <StatTile label="Highest" value={fmtV(Math.max(...nums))} />
+            </div>
+            <div className="sg-sample">{(data.rows.slice(0, 6)).map((r, i) => <div key={i}><span>{String(r[0])}</span><strong>{r[1] == null ? '—' : fmtV(Number(r[1]))}</strong></div>)}</div>
+            <div className="small faint">Based on {nums.length} {who} with a value.</div>
+          </>) : (<>
+            <TopValues items={[...counts.entries()].sort((x, y) => y[1] - x[1]).map(([label, value]) => ({ label, value }))} unit={who} max={6} />
+            <div className="small faint">Based on {values.length} {who} with a value.</div>
+          </>)}
+    </Section>
+  )
+}
+
+function TraitInspector({ t, schema, usage, type, canManage, onEdit, onDelete }: {
+  t: Trait; schema: Schema; usage: { audiences: Audience[]; syncs: Sync[] }; type: string; canManage: boolean; onEdit: () => void; onDelete: () => void
+}) {
+  const g = traitGlyph(t.method === 'list' ? 'list' : (type as ColumnType))
+  const c = t.config ?? {}
+  const model = schema.models.find((m) => m.id === c.model_id)
+  const tw = windowWords(c.time_window).trim()
+  return (
+    <Inspector
+      icon={<Glyph kind={g.kind} tone={g.tone} size={40} />}
+      kicker={<>Trait · {METHODS.find((m) => m.value === t.method)?.label}</>}
+      title={t.name}
+      actions={canManage ? <button className="btn sm" onClick={onEdit}>Edit</button> : undefined}
+      sentence={<>{describeTrait(t, schema)} — one value for every {schema.parent!.name.toLowerCase().replace(/s$/, '')}.</>}>
+      {t.description && <p className="sg-desc">{t.description}</p>}
+      <div className="cx-stats">
+        <StatTile label="Value" value={t.method === 'list' ? 'List' : TYPE_LABEL[type] ?? type} />
+        <StatTile label="Audiences" value={usage.audiences.length} sub={usage.audiences.length ? 'filter on it' : 'none yet'} />
+        <StatTile label="Syncs" value={usage.syncs.length} sub={usage.syncs.length ? 'send it' : 'none yet'} />
+      </div>
+      <SampleValues t={t} schema={schema} type={type} />
+      <Section title="Where it's used">
+        {usage.audiences.length + usage.syncs.length === 0 ? <div className="sg-hint">Not used yet — add it as a filter in an audience or map it as a field in a sync.</div> : (
+          <div className="sg-uses">
+            {usage.audiences.map((a) => <Link key={`a${a.id}`} to={`/audiences/${a.id}`} className="sg-use"><Glyph kind="audience" size={24} /><span>{a.name}</span><small>Audience filter</small></Link>)}
+            {usage.syncs.map((x) => <Link key={`s${x.id}`} to={`/activations/${x.id}`} className="sg-use"><BrandLogo type={x.destination_type} size={24} /><span>{x.name}</span><small>Field sent</small></Link>)}
+          </div>
+        )}
+      </Section>
+      <Section title="How it's calculated">
+        <Facts rows={[
+          ['Method', METHODS.find((m) => m.value === t.method)?.label ?? t.method],
+          ['From', model?.name ?? (t.method === 'sql_formula' ? 'Profile columns and traits' : '—')],
+          ...(c.column ? [['Column', <code key="c">{c.column}</code>] as [string, ReactNode]] : []),
+          ['Time window', tw || 'All time'],
+          ...(c.filter?.conditions?.length ? [['Filters', `${c.filter.conditions.length} condition${c.filter.conditions.length === 1 ? '' : 's'}`] as [string, ReactNode]] : []),
+        ]} />
+      </Section>
+      {canManage && <div className="sg-quiet-actions"><span className="grow" /><button className="btn ghost sm danger" onClick={onDelete}>Delete trait</button></div>}
+    </Inspector>
   )
 }
 
@@ -105,7 +194,8 @@ export default function Traits() {
   const [modal, setModal] = useState<{ existing?: Trait } | null>(null)
   const [q, setQ] = useUrlState('q')
   const [method, setMethod] = useUrlState('method', 'all')
-  const [sort, toggleSort] = useSort('name')
+  const [sortKey, setSortKey] = useUrlState('sort', 'name')
+  const [selected, setSelected] = useSelected()
   const s = schema.data
   const me = useMe()
 
@@ -125,107 +215,90 @@ export default function Traits() {
         : 'Nothing uses it right now. This can’t be undone.',
     })
     if (!ok) return
-    try { await api.del(`/traits/${t.id}`); schema.reload(); toast(`“${t.name}” deleted`) } catch (e) { toast((e as Error).message, 'error') }
+    try { await api.del(`/traits/${t.id}`); setSelected(null); schema.reload(); toast(`“${t.name}” deleted`) } catch (e) { toast((e as Error).message, 'error') }
   }
 
   const canManage = !!s?.parent && me.can('traits.manage', s.parent.brand_id ?? null)
   const typeOf = (t: Trait) => s?.virtual_columns.find((v) => v.name === `trait.${t.id}`)?.type ?? 'string'
   const all = (s?.traits ?? []) as TraitRow[]
   const base = all.filter((t) => matches(q, t.name, t.description, s ? describeTrait(t, s) : ''))
+  const sort = sortKey.startsWith('-') ? { key: sortKey.slice(1), dir: 'desc' as const } : { key: sortKey, dir: 'asc' as const }
   const rows = sortBy(base.filter((t) => method === 'all' || t.method === method), sort, {
-    name: (t) => t.name.toLowerCase(), method: (t) => t.method, type: (t) => typeOf(t), updated: (t) => t.updated_at ?? null,
-    used: (t) => { const u = usage(t); return u.audiences.length + u.syncs.length },
+    name: (t) => t.name.toLowerCase(), used: (t) => { const u = usage(t); return u.audiences.length + u.syncs.length }, updated: (t) => t.updated_at ?? null,
   })
-  const paged = usePaged(rows, 20, `${q}|${method}|${sort.key}${sort.dir}|${s?.parent?.id}`, 'page')
+  const paged = usePaged(rows, 14, `${q}|${method}|${sortKey}|${s?.parent?.id}`, 'page')
+  const current = all.find((t) => String(t.id) === selected) ?? paged.slice[0] ?? rows[0]
   const methodsUsed = METHODS.filter((m) => all.some((t) => t.method === m.value))
   const clear = () => { setQ(''); setMethod('all') }
 
-  if (schema.loading && !s) return <div className="page wide"><PageHead stage="modeling" title="Traits" /><SkeletonRows rows={5} /></div>
+  if (schema.loading && !s) return <div className="page wide sg-page"><PageHead stage="modeling" title="Traits" /><SkeletonRows rows={5} /></div>
   if (!s?.parent) {
     return <div className="page"><Empty title="Set up your data first" action={<Link to="/schema" className="btn primary">Open data model</Link>}>Traits are calculated from your customer data. A Platform Admin sets up the data model first.</Empty></div>
   }
+  const who = s.parent.name.toLowerCase().replace(/s$/, '')
   return (
     <BuilderProvider value={{ schema: s, audiences: [] }}>
-      <div className="page wide">
+      <div className="page wide sg-page">
         <PageHead stage="modeling" title="Traits"
-          subtitle="Reusable calculated values — total page views, video minutes, favorite section — usable in audience filters, profiles and syncs."
+          subtitle={`Values calculated once for every ${who} — total video minutes, favorite section, last seen — and reused in audiences, profiles and syncs.`}
           actions={canManage ? <button className="btn primary" onClick={() => setModal({})} disabled={!s.models.length} title={!s.models.length ? 'Add a related or event model first' : undefined}>+ New trait</button> : undefined} />
         <ErrorBox error={schema.error} />
 
-        {s.parents.length > 1 && (
-          <div className="seg-parent-switch">
-            <span className="small muted">Traits for</span>
-            <select className="input sm" value={s.parent.id} onChange={(e) => setParams({ parent: e.target.value }, { replace: true })} aria-label="Parent model">
-              {s.parents.map((p) => <option key={p.id} value={p.id}>{p.name} · {me.brandName(p.brand_id)}</option>)}
-            </select>
-          </div>
-        )}
-
         {!all.length ? (
-          <div className="card">
-            <Empty title="No traits yet" action={canManage ? <button className="btn primary" onClick={() => setModal({})} disabled={!s.models.length}>Create a trait</button> : undefined}>
-              Build a value once — like total video minutes over 30 days — and reuse it in every audience, profile and sync.
-            </Empty>
+          <div className="card sg-onboard">
+            <Glyph kind="number" size={52} />
+            <h2>Create your first trait</h2>
+            <p className="muted">A trait turns raw activity into one meaningful value per {who} — then marketers filter on it like any profile field.</p>
+            <div className="sg-ideas">
+              <div className="sg-idea"><strong>Video minutes, last 30 days</strong><span>Total of a number across events.</span></div>
+              <div className="sg-idea"><strong>Favorite section</strong><span>The most frequent value people engage with.</span></div>
+              <div className="sg-idea"><strong>Last seen</strong><span>The most recent activity date.</span></div>
+            </div>
+            {canManage ? <button className="btn primary" onClick={() => setModal({})} disabled={!s.models.length}>+ New trait</button>
+              : <div className="small faint">Brand Marketing Admins can create traits.</div>}
           </div>
-        ) : (<>
-          <Toolbar>
-            <SearchBox value={q} onChange={setQ} placeholder={`Search ${all.length} traits…`} />
-            {methodsUsed.length > 1 && (
-              <FilterChips label="Calculation method" value={method} onChange={setMethod} options={[
-                { value: 'all', label: 'All', count: base.length },
-                ...methodsUsed.map((m) => ({ value: m.value as string, label: m.label, count: base.filter((t) => t.method === m.value).length })),
-              ]} />
-            )}
-            <span className="grow" />
-            {(q || method !== 'all') && <button className="btn ghost sm" onClick={clear}>Clear filters</button>}
-          </Toolbar>
-          <div className="card seg-card">
-            {rows.length ? (
-              <table className="table seg-table">
-                <thead><tr>
-                  <SortTh k="name" sort={sort} onSort={toggleSort}>Trait</SortTh>
-                  <SortTh k="type" sort={sort} onSort={toggleSort}>Value</SortTh>
-                  <SortTh k="used" sort={sort} onSort={toggleSort}>Used in</SortTh>
-                  <SortTh k="updated" sort={sort} onSort={toggleSort} className="seg-hide-sm">Updated</SortTh>
-                  {canManage && <th aria-label="Actions" />}
-                </tr></thead>
-                <tbody>
-                  {paged.slice.map((t) => {
-                    const u = usage(t)
-                    return (
-                      <tr key={t.id}>
-                        <td>
-                          <div className="seg-trait">
-                            <strong>{t.name}</strong>
-                            <div className="small muted">{describeTrait(t, s)}</div>
-                            {t.description && <div className="small faint seg-desc" title={t.description}>{t.description}</div>}
-                          </div>
-                        </td>
-                        <td><span className="badge">{t.method === 'list' ? 'List of values' : TYPE_LABEL[typeOf(t)] ?? typeOf(t)}</span><div className="small faint" style={{ marginTop: 4 }}>{METHODS.find((m) => m.value === t.method)?.label}</div></td>
-                        <td className="small">
-                          {u.audiences.length + u.syncs.length === 0 ? <span className="faint">Not used yet</span> : (
-                            <div className="stack" style={{ gap: 2 }}>
-                              {u.audiences.length > 0 && <span title={u.audiences.map((a) => a.name).join(', ')}>{u.audiences.length} audience{u.audiences.length === 1 ? '' : 's'}</span>}
-                              {u.syncs.length > 0 && <span title={u.syncs.map((x) => x.name).join(', ')}>{u.syncs.length} sync{u.syncs.length === 1 ? '' : 's'}</span>}
-                            </div>
-                          )}
-                        </td>
-                        <td className="muted seg-hide-sm">{fmt.ago(t.updated_at)}</td>
-                        {canManage && (
-                          <td className="seg-actions">
-                            <button className="btn ghost sm" onClick={() => setModal({ existing: t })}>Edit</button>
-                            <button className="btn ghost sm danger" onClick={() => remove(t)}>Delete</button>
-                          </td>
-                        )}
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            ) : <NoResults what="traits" onClear={clear} />}
-          </div>
-          <Pager page={paged.page} pages={paged.pages} total={rows.length} pageSize={20} onPage={paged.setPage} noun="trait" />
-        </>)}
+        ) : (
+          <CollectionLayout
+            list={
+              <ListPane title={s.parents.length > 1 ? `Traits for ${s.parent.name}` : 'All traits'} count={rows.length}
+                toolbar={<>
+                  <SearchBox value={q} onChange={setQ} placeholder="Search traits…" />
+                  {methodsUsed.length > 1 && (
+                    <FilterChips label="Calculation method" value={method} onChange={setMethod} options={[
+                      { value: 'all', label: 'All', count: base.length },
+                      ...methodsUsed.map((m) => ({ value: m.value as string, label: m.label, count: base.filter((t) => t.method === m.value).length })),
+                    ]} />
+                  )}
+                  <select className="input sm" value={sortKey} onChange={(e) => setSortKey(e.target.value)} aria-label="Sort">
+                    <option value="name">Name A–Z</option><option value="-used">Most used</option><option value="-updated">Recently changed</option>
+                  </select>
+                  {s.parents.length > 1 && (
+                    <select className="input sm" value={s.parent.id} onChange={(e) => setParams({ parent: e.target.value }, { replace: true })} aria-label="Parent model">
+                      {s.parents.map((p) => <option key={p.id} value={p.id}>{p.name} · {me.brandName(p.brand_id)}</option>)}
+                    </select>
+                  )}
+                  {(q || method !== 'all') && <button className="btn ghost sm" onClick={clear}>Clear</button>}
+                </>}
+                footer={rows.length > 14 ? <Pager page={paged.page} pages={paged.pages} total={rows.length} pageSize={14} onPage={paged.setPage} noun="trait" /> : undefined}>
+                {rows.length ? paged.slice.map((t) => {
+                  const u = usage(t)
+                  const n = u.audiences.length + u.syncs.length
+                  const g = traitGlyph(t.method === 'list' ? 'list' : typeOf(t))
+                  return (
+                    <ListRow key={t.id} selected={current?.id === t.id} onSelect={() => setSelected(String(t.id))}
+                      leading={<Glyph kind={g.kind} tone={g.tone} />}
+                      title={t.name} subtitle={describeTrait(t, s)}
+                      meta={<><strong>{n || '—'}</strong><span>{n ? `use${n === 1 ? '' : 's'}` : 'unused'}</span></>} />
+                  )
+                }) : <NoResults what="traits" onClear={clear} />}
+              </ListPane>
+            }
+            inspector={current ? (
+              <TraitInspector t={current} schema={s} usage={usage(current)} type={typeOf(current)} canManage={canManage}
+                onEdit={() => setModal({ existing: current })} onDelete={() => remove(current)} />
+            ) : <Inspector empty={<div>Select a trait to see its values.</div>} />}
+          />
+        )}
         {modal && <TraitModal schema={s} existing={modal.existing} onClose={() => setModal(null)}
           onSaved={(n) => { setModal(null); schema.reload(); toast(modal.existing ? `“${n}” saved` : `“${n}” created`) }} />}
       </div>

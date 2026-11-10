@@ -230,7 +230,9 @@ def load_user(email: str, name: str = "", groups: list[str] | None = None, user_
 
 def _resolve(headers) -> User:
     if IN_DATABRICKS_APP:
-        email = headers.get("x-forwarded-email") or headers.get("x-forwarded-preferred-username") or ""
+        # people arrive with an email; service principals (e.g. a website's server) may only carry an id
+        email = (headers.get("x-forwarded-email") or headers.get("x-forwarded-preferred-username")
+                 or headers.get("x-forwarded-user") or "")
         if not email:
             raise HTTPException(401, "Sign in through Databricks to use this app")
         return load_user(email, headers.get("x-forwarded-preferred-username") or "",

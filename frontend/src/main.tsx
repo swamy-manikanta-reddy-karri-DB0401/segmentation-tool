@@ -4,6 +4,8 @@ import { BrowserRouter, Link, Route, Routes, useLocation } from 'react-router-do
 import './styles.css'
 import './cdp.css'
 import './kit.css'
+import './viz.css'
+import './collection.css'
 import Overview from './pages/Overview'
 import Sources from './pages/Sources'
 import Setup from './pages/Setup'
@@ -139,7 +141,7 @@ function Layout() {
   return (
     <div className="app">
       <header className="topbar">
-        <img src="/mediamint-logo.svg" alt="MediaMint" className="topbar-logo" />
+        <img src="/mediamint-logo-ink.svg" alt="MediaMint" className="topbar-logo logo-ink" /><img src="/mediamint-logo.svg" alt="" aria-hidden="true" className="topbar-logo logo-white" />
         <span className="topbar-product">CDP</span>
         <ThemeSwitch />
         <nav className="topbar-nav">
@@ -148,7 +150,7 @@ function Layout() {
       </header>
       <aside className="sidebar">
         <Link to="/" className="side-brand">
-          <img src="/mediamint-logo.svg" alt="MediaMint" className="brand-logo" />
+          <img src="/mediamint-logo-ink.svg" alt="MediaMint" className="brand-logo logo-ink" /><img src="/mediamint-logo.svg" alt="" aria-hidden="true" className="brand-logo logo-white" />
           <span className="brand-sub">Customer Data Platform</span>
         </Link>
         <button className="side-find" onClick={() => window.dispatchEvent(new Event('quickfind:open'))} title="Find anything (Ctrl / ⌘ + K)">

@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import access, alerts, audiences, catalog, config, connection, db, destinations, insights, scheduler, sync_engine
+from . import access, alerts, targeting, audiences, catalog, config, connection, db, destinations, insights, scheduler, sync_engine
 from .compiler import CompileError, Compiler, source, trait_type
 from .databricks import DatabricksError, client, reset_client
 from .scheduler import ScheduleError
@@ -533,7 +533,8 @@ def update_audience(audience_id: int, body: dict = Body(...)):
         values["splits"] = _validate_splits(body["splits"])
     if body.get("last_size") is not None:
         values.update(last_size=body["last_size"], size_updated_at=db.now())
-    values["updated_at"] = db.now()
+    if set(body) - {"last_size"}:  # recounting only refreshes the size; it is not an edit
+        values["updated_at"] = db.now()
     db.update("audiences", audience_id, values)
     return _get("audiences", audience_id)
 
@@ -814,7 +815,11 @@ LEFT JOIN models m ON m.id = a.parent_id
 def _sync_out(s: dict) -> dict:
     s["running"] = sync_engine.is_running(s["id"])
     s["destination_configured"] = insights.destination_configured(s["destination_id"])
-    s["config"] = sync_engine.normalize_config(s["config"], destinations.get(s["destination_type"]))
+    try:
+        s["config"] = sync_engine.normalize_config(s["config"], destinations.get(s["destination_type"]))
+        s["config_error"] = None
+    except (ValueError, KeyError) as e:  # one broken sync must not take down the whole list
+        s["config_error"] = str(e)
     u = access.current()
     s["can"] = {"edit": u.can("syncs.edit", s["brand_id"]), "approve": u.can("syncs.approve", s["brand_id"]),
                 "run": u.can("syncs.run", s["brand_id"], s["destination_id"])}
@@ -916,6 +921,15 @@ def update_sync(sync_id: int, body: dict = Body(...)):
     else:
         values = _validate_sync({**current, **body})
         values.update(_approval(brand_id))
+        old_value = ((current.get("config") or {}).get("options") or {}).get("value")
+        if (values["config"].get("options") or {}).get("value") != old_value and \
+                (_get("destinations", values["destination_id"])["type"] == "gam_kv"):
+            # the audience is published under a new name: drop the old members and resend everyone
+            targeting.clear_sync(sync_id)
+            try:
+                sync_engine.drop_state(sync_id)
+            except DatabricksError:
+                pass
         db.update("syncs", sync_id, values)
         access.audit("update", "sync", sync_id, brand_id, name=values["name"], approval=values["approval_status"])
     scheduler.refresh_next(sync_id)
@@ -932,6 +946,7 @@ def delete_sync(sync_id: int):
         sync_engine.drop_state(sync_id)
     except DatabricksError:
         pass  # best effort — app record is removed regardless
+    targeting.clear_sync(sync_id)  # key-value members stop being served
     db.delete("syncs", sync_id)
     access.audit("delete", "sync", sync_id, None, name=s["name"])
     return {"ok": True}
@@ -1158,6 +1173,49 @@ def put_email_settings(body: dict = Body(...)):
         raise ValueError("Set the From address")
     db.set_setting("smtp", s)
     return get_email_settings()
+
+
+# ---- on-site targeting (Ad Manager key-values) -------------------------------------------------
+
+def _require_targeting_client() -> None:
+    u = access.current()
+    if not (u.platform_admin or u.email in targeting.clients()):
+        db.set_setting("targeting_last_denied", {"identity": u.email, "at": db.now()})  # shown to admins so they can allow it
+        raise HTTPException(403, "This identity isn't allowed to look up visitors. A Platform Admin can add it under "
+                                 "Destinations → Ad Manager key-values → Website lookup.")
+
+
+@app.get("/api/targeting")
+def targeting_lookup(request: Request):
+    """Which audiences a visitor is in, as Ad Manager key-values. ?user_id=… (repeat for several, max 100)."""
+    _require_targeting_client()
+    ids = request.query_params.getlist("user_id")
+    if not ids:
+        raise ValueError("Pass at least one user_id")
+    found = targeting.lookup(ids)
+    body = {"user_id": ids[0], "targeting": found.get(ids[0], {})} if len(ids) == 1 else {"visitors": found}
+    return JSONResponse(body, headers={"Cache-Control": "private, max-age=60"})
+
+
+@app.post("/api/targeting/lookup")
+def targeting_lookup_batch(body: dict = Body(...)):
+    _require_targeting_client()
+    return {"visitors": targeting.lookup([str(x) for x in body.get("user_ids") or []])}
+
+
+@app.get("/api/targeting/summary")
+def targeting_summary():
+    access.require("destinations.manage")
+    return {"clients": targeting.clients(), "values": targeting.stats(), "last_denied": db.get_setting("targeting_last_denied"),
+            "lookup_url": f"{alerts.app_url() or ''}/api/targeting?user_id=VISITOR_ID"}
+
+
+@app.put("/api/targeting/clients")
+def put_targeting_clients(body: dict = Body(...)):
+    access.require("settings.manage")
+    out = targeting.set_clients(body.get("clients") or [])
+    access.audit("update", "targeting_clients", None, None, clients=out)
+    return {"clients": out}
 
 
 # ---- access control: me, brands, roles --------------------------------------------------------
