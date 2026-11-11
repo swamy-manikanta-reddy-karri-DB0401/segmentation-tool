@@ -1,0 +1,80 @@
+/* =====================================================================
+   Sign-in page, "My access" page, user / role editors
+   ===================================================================== */
+.auth-page { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; background: var(--bg); }
+.auth-card { width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 14px; padding: 32px 28px 24px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 8px 30px rgb(0 0 0 / 7%); }
+.auth-logo { height: 26px; width: auto; align-self: flex-start; }
+.auth-card h1 { margin: 6px 0 0; font-size: 22px; }
+.auth-sub { margin: -10px 0 4px; color: var(--text-3); font-size: 13px; }
+.auth-field { display: flex; flex-direction: column; gap: 5px; font-size: 13px; font-weight: 600; }
+.auth-field .input { width: 100%; font-weight: 400; }
+.auth-submit { width: 100%; justify-content: center; height: 38px; margin-top: 4px; }
+.auth-error { padding: 9px 12px; border-radius: 9px; font-size: 13px; color: var(--red); background: var(--red-soft); }
+.auth-notice { padding: 9px 12px; border-radius: 9px; font-size: 13px; color: var(--text-2); background: var(--blue-soft); }
+.auth-foot { margin: 4px 0 0; font-size: 12px; color: var(--text-3); text-align: center; }
+
+/* my access */
+.me-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+.me-id { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.me-id h2 { margin: 0; font-size: 18px; }
+.me-id small { color: var(--text-3); }
+.me-note { padding: 10px 12px; border-radius: 10px; font-size: 13px; background: var(--blue-soft); color: var(--text-2); }
+.me-brand { padding: 14px 16px; }
+.me-brand h3 { margin: 0 0 4px; font-size: 15px; }
+.me-brand .ac-role { margin: 0 4px 6px 0; }
+.me-pw { display: grid; gap: 12px; max-width: 360px; }
+
+/* users table */
+.us-flags { display: inline-flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.us-off { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 0 6px; border-radius: 4px; color: var(--red); background: var(--red-soft); }
+.us-actions { display: inline-flex; gap: 2px; justify-content: flex-end; flex-wrap: wrap; }
+
+/* role editor */
+.rl-perms { display: flex; flex-direction: column; gap: 6px; }
+.rl-perm { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; font-size: 13px; }
+.rl-perm.on { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 7%, transparent); }
+.rl-perm.locked { opacity: .75; cursor: default; }
+.rl-perm small { display: block; color: var(--text-3); font-size: 12px; }
+.rl-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.rl-card { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.rl-card header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.rl-card p { margin: 0; color: var(--text-2); font-size: 13px; }
+.rl-card footer { display: flex; gap: 6px; margin-top: auto; }
+
+/* sidebar brand switcher */
+.brand-switch { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; margin-top: auto; border-radius: 10px; background: var(--side-bg-2); }
+.brand-switch label { font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--side-text-dim); }
+.brand-switch select { width: 100%; }
+.brand-switch .brand-switch-one { color: var(--side-strong); font-size: 13.5px; }
+.brand-switch small { color: var(--side-text-dim); font-size: 11px; }
+
+/* top strip with the account avatar (top right) */
+.main { --strip-h: 48px; }
+.main-strip { position: sticky; top: 0; z-index: 40; height: var(--strip-h); display: flex; align-items: center; justify-content: flex-end; padding: 0 24px; background: var(--bg); }
+.main-strip + .page { padding-top: 12px; }
+.um { position: relative; }
+.um-btn { width: 34px; height: 34px; border-radius: 50%; border: 2px solid var(--surface); display: grid; place-items: center; cursor: pointer; padding: 0;
+  font: 700 12px var(--font); letter-spacing: .02em; color: #fff; background: linear-gradient(135deg, var(--brand-fill), var(--teal-deep)); box-shadow: 0 0 0 1px var(--border); }
+.um-btn:hover, .um-btn[aria-expanded="true"] { box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 30%, transparent); }
+.um-pop { position: absolute; top: 44px; right: 0; width: 290px; padding: 6px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 16%); display: flex; flex-direction: column; gap: 2px; }
+.um-head { display: flex; gap: 12px; align-items: center; padding: 12px 10px 14px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.um-avatar { width: 42px; height: 42px; border-radius: 50%; flex: none; display: grid; place-items: center; font-weight: 700; font-size: 14px; color: #fff;
+  background: linear-gradient(135deg, var(--brand-fill), var(--teal-deep)); }
+.um-id { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.um-id strong { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.um-id small { color: var(--text-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.um-role { margin-top: 4px; align-self: flex-start; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; color: var(--brand); background: var(--brand-soft-2); }
+.um-item { display: block; width: 100%; text-align: left; padding: 9px 10px; border: 0; border-radius: 8px; background: none; color: var(--text); font: 500 13.5px var(--font); cursor: pointer; text-decoration: none; }
+.um-item:hover { background: var(--surface-2); }
+.um-persona { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; font-size: 11.5px; color: var(--text-3); }
+.um-persona select { width: 100%; padding: 5px 6px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font: 12.5px var(--font); }
+
+/* sticky side panels sit below the strip */
+.dx-inspector, .cx-inspector, .sg-summary, .pf-list, .dm-rail { top: calc(var(--strip-h, 0px) + 12px); }
+.dx-inspector, .cx-inspector, .sg-summary { max-height: calc(100vh - var(--strip-h, 0px) - 28px); }
+
+@media (max-width: 760px) { .main-strip { padding: 0 16px; } }
+
+.um-theme { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; font-size: 13.5px; font-weight: 500; }

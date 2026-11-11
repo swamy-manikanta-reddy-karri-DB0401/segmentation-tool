@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { api, fmt } from '../api'
+import { SHOW_PROFILES } from '../features'
 import type { Audience, Destination, Overview as OverviewData, Sync, SyncRun } from '../api'
 import { DestIcon, ErrorBox, StatusBadge, useAsync } from '../components/ui'
 import { useMe } from '../components/me'
@@ -48,8 +49,8 @@ function stages(o: OverviewData, syncs: Sync[] | undefined, spark: { x: string; 
       caption: `rows in ${plural(o.source.tables, 'table')}`, status: o.source.ok ? 'ready' : 'attention' },
     { key: 'schema', step: '1 · Schema', title: 'Data model', to: '/schema', icon: ICON.schema, value: String(models),
       caption: `models · ${plural(o.schema.events, 'event')}`, status: o.schema.parents ? 'ready' : 'idle' },
-    { key: 'modeling', step: '2 · Modeling', title: 'Profiles', to: '/profiles', icon: ICON.modeling, value: fmt.compact(o.modeling.profiles),
-      caption: `people · ${plural(o.modeling.traits, 'trait')}`, status: o.modeling.profiles ? 'ready' : 'idle' },
+    ...(SHOW_PROFILES ? [{ key: 'modeling', step: '2 · Modeling', title: 'Profiles', to: '/profiles', icon: ICON.modeling, value: fmt.compact(o.modeling.profiles),
+      caption: `people · ${plural(o.modeling.traits, 'trait')}`, status: (o.modeling.profiles ? 'ready' : 'idle') as Stage['status'] }] : []),
     { key: 'segmentation', step: '3 · Segmentation', title: 'Audiences', to: '/audiences', icon: ICON.segmentation, value: String(o.segmentation.audiences),
       caption: o.segmentation.largest ? `largest ${fmt.compact(o.segmentation.largest.size)} people` : 'none built yet', status: o.segmentation.audiences ? 'ready' : 'idle' },
     { key: 'activation', step: '4 · Activation', title: 'Delivered', to: '/activations', icon: ICON.activation, value: fmt.compact(a.records_synced),

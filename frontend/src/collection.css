@@ -3,6 +3,8 @@
    ===================================================================== */
 .cx-layout { display: grid; grid-template-columns: minmax(0, 1fr) 440px; gap: 16px; align-items: start; }
 .cx-layout.wide { grid-template-columns: minmax(0, 1fr) 520px; }
+.cx-layout.solo, .cx-layout.wide.solo { grid-template-columns: minmax(0, 1fr); }
+.cx-ins-close { flex: none; }
 
 .cx-list { padding: 0; overflow: hidden; display: flex; flex-direction: column; min-height: 420px; max-height: calc(100vh - 190px); }
 .cx-list-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px 10px; }

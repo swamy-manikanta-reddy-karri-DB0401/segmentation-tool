@@ -4,10 +4,23 @@
  * Selection lives in the URL (?id=) so links are shareable and Back works.
  */
 import type { ReactNode } from 'react'
-import { useEffect, useRef } from 'react'
+import { createContext, useContext, useEffect, useRef } from 'react'
 
-export function CollectionLayout({ list, inspector, wideInspector }: { list: ReactNode; inspector: ReactNode; wideInspector?: boolean }) {
-  return <div className={`cx-layout ${wideInspector ? 'wide' : ''}`}>{list}{inspector}</div>
+const CloseCtx = createContext<(() => void) | null>(null)
+
+/**
+ * `open` = something is selected. Until then the list uses the full width and there is no details panel;
+ * once an item is picked the panel appears, with a close button (`onClose`) that goes back to the full-width list.
+ */
+export function CollectionLayout({ list, inspector, wideInspector, open = true, onClose }: {
+  list: ReactNode; inspector: ReactNode; wideInspector?: boolean; open?: boolean; onClose?: () => void
+}) {
+  return (
+    <div className={`cx-layout ${wideInspector ? 'wide' : ''} ${open ? '' : 'solo'}`}>
+      {list}
+      {open && <CloseCtx.Provider value={onClose ?? null}>{inspector}</CloseCtx.Provider>}
+    </div>
+  )
 }
 
 /** Left pane: header (title, count, actions), toolbar (search/filters), scrolling rows, footer (pager). */
@@ -55,6 +68,7 @@ export function Inspector({ icon, kicker, title, sentence, actions, tabs, childr
   icon?: ReactNode; kicker?: ReactNode; title?: ReactNode; sentence?: ReactNode; actions?: ReactNode
   tabs?: { key: string; label: ReactNode; active: boolean; onClick: () => void }[]; children?: ReactNode; empty?: ReactNode
 }) {
+  const close = useContext(CloseCtx)
   if (empty) return <aside className="card cx-inspector cx-inspector-empty">{empty}</aside>
   return (
     <aside className="card cx-inspector">
@@ -65,6 +79,7 @@ export function Inspector({ icon, kicker, title, sentence, actions, tabs, childr
           <h2 className="cx-ins-title" title={typeof title === 'string' ? title : undefined}>{title}</h2>
         </div>
         {actions && <div className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>{actions}</div>}
+        {close && <button className="btn ghost sm cx-ins-close" onClick={close} aria-label="Close details" title="Close details">✕</button>}
       </header>
       {sentence && <p className="cx-sentence">{sentence}</p>}
       {tabs && (

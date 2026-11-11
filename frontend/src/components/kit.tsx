@@ -8,6 +8,7 @@ import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../api'
+import { SHOW_PRIORITY_LISTS, SHOW_PROFILES } from '../features'
 
 // ---------------------------------------------------------------------------
 // list state kept in the URL, so filters survive reloads and links can be shared
@@ -212,9 +213,9 @@ type Hit = { kind: string; label: string; hint?: string; to: string }
 const PAGES: Hit[] = [
   { kind: 'Page', label: 'Home', to: '/' }, { kind: 'Page', label: 'Audiences', to: '/audiences' },
   { kind: 'Page', label: 'Syncs', to: '/activations' }, { kind: 'Page', label: 'Alerts', to: '/alerts' }, { kind: 'Page', label: 'Destinations', to: '/destinations' },
-  { kind: 'Page', label: 'Profiles', to: '/profiles' }, { kind: 'Page', label: 'Traits', to: '/traits' },
+  ...(SHOW_PROFILES ? [{ kind: 'Page', label: 'Profiles', to: '/profiles' }] : []), { kind: 'Page', label: 'Traits', to: '/traits' },
   { kind: 'Page', label: 'Data model', to: '/schema' }, { kind: 'Page', label: 'Sources', to: '/sources' },
-  { kind: 'Page', label: 'Priority lists', to: '/governance?tab=priority' }, { kind: 'Page', label: 'Destination rules', to: '/governance?tab=rules' },
+  ...(SHOW_PRIORITY_LISTS ? [{ kind: 'Page', label: 'Priority lists', to: '/governance?tab=priority' }] : []), { kind: 'Page', label: 'Destination rules', to: '/governance?tab=rules' },
   { kind: 'Page', label: 'Access & roles', to: '/access' },
   { kind: 'Action', label: 'New audience', to: '/audiences/new' }, { kind: 'Action', label: 'New sync', to: '/activations/new' },
 ]

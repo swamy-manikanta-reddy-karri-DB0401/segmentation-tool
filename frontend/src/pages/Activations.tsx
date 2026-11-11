@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api, fmt } from '../api'
 import type { Sync, SyncRun } from '../api'
@@ -162,8 +162,7 @@ export default function Activations() {
     name: (r) => r.s.name.toLowerCase(), last: (r) => r.s.last_run_at ?? '', next: (r) => r.s.next_run_at ?? '~', health: (r) => ['failing', 'warning', 'rejected', 'pending', 'waiting', 'paused', 'running', 'new', 'healthy'].indexOf(r.h.key),
   })
   const paged = usePaged(filtered, PAGE, `${q}|${group}|${dest}|${brand}|${sort.key}${sort.dir}`, 'page')
-  const selected = rows.find((r) => String(r.s.id) === sel) ?? (filtered[0] ?? null)
-  useEffect(() => { if (!sel && filtered[0]) setSel(String(filtered[0].s.id)) }, [sel, filtered]) // eslint-disable-line react-hooks/exhaustive-deps
+  const selected = rows.find((r) => String(r.s.id) === sel) ?? null
   const toReview = rows.filter(({ s }) => s.approval_status === 'pending' && s.can?.approve)
   const canCreate = me.can('syncs.edit')
   const clear = () => { setQ(''); setGroup('all'); setDest(''); setBrand('') }
@@ -190,7 +189,7 @@ export default function Activations() {
           </Empty>
         </div>
       ) : (
-        <CollectionLayout
+        <CollectionLayout open={!!selected} onClose={() => setSel('')}
           list={
             <ListPane title="All syncs" count={rows.length}
               actions={<select className="input sm" value={rawSort} aria-label="Sort" onChange={(e) => setRawSort(e.target.value)}>

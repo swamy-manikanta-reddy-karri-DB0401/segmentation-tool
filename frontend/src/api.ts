@@ -400,12 +400,53 @@ export interface Me {
   name: string
   groups: string[]
   platform_admin: boolean
-  roles: { role: string; label: string; brand_id: number | null; destination_ids: number[] }[]
+  roles: { role: string; label: string; brand_id: number | null; brand_name: string | null; destination_ids: number[]; permissions: string[] }[]
   platform: Record<PlatformPerm, boolean>
+  /** The brand(s) they're working in right now: what the app shows and what they may do. */
   brands: { id: number; name: string; can: Record<BrandPerm, boolean> }[]
+  /** The brand chosen in the switcher; null = every brand they can see. */
+  active_brand_id: number | null
+  /** Brands they can switch to; `all` = they may also work across every brand (admins, brand-wide roles). */
+  switch: { brands: { id: number; name: string }[]; all: boolean }
+  /** What their roles allow on each brand, whichever one is active. */
+  all_brands_access: { id: number; name: string; can: Record<BrandPerm, boolean> }[]
   in_databricks_app: boolean
+  /** local = email + password, databricks = Databricks identity, open = sign-in switched off (dev personas) */
+  auth_mode: 'local' | 'databricks' | 'open'
 }
-export interface RoleInfo { role: string; label: string; description: string; permissions: string[] }
+export interface DirectoryResult<T> { items: T[]; error: string }
+export interface DirectoryUser { email: string; name: string }
+export interface DirectoryGroup { name: string }
+
+export const BRAND_KEY = 'mm-cdp-brand'
+/** The brand picked in the sidebar switcher: a brand id, "all", or '' for "let the app choose". */
+export function getActiveBrand(): string {
+  try { return localStorage.getItem(BRAND_KEY) || '' } catch { return '' }
+}
+export function setActiveBrand(value: string) {
+  try { if (value) localStorage.setItem(BRAND_KEY, value); else localStorage.removeItem(BRAND_KEY) } catch { /* storage unavailable */ }
+}
+export interface RoleInfo { role: string; label: string; description: string; permissions: string[]; custom?: boolean; created_by?: string; created_at?: string }
+export interface UserRow {
+  id: number
+  email: string
+  name: string
+  is_admin: boolean
+  active: boolean
+  created_at: string
+  created_by: string
+  last_login_at: string | null
+  roles: { id: number; role: string; label: string; brand_id: number | null; brand_name: string | null }[]
+}
+export interface AuthConfig { mode: 'local' | 'databricks' | 'open'; min_password: number }
+
+export const TOKEN_KEY = 'mm-cdp-token'
+export function getToken(): string {
+  try { return localStorage.getItem(TOKEN_KEY) || '' } catch { return '' }
+}
+export function setToken(token: string) {
+  try { if (token) localStorage.setItem(TOKEN_KEY, token); else localStorage.removeItem(TOKEN_KEY) } catch { /* storage unavailable */ }
+}
 export interface RoleBinding {
   id: number
   principal_type: 'user' | 'group'
@@ -429,9 +470,19 @@ export class ApiError extends Error {}
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method,
-    headers: { ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(getPersona() ? { 'X-Dev-User': getPersona() } : {}) },
+    headers: {
+      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
+      ...(getPersona() ? { 'X-Dev-User': getPersona() } : {}),
+      ...(getActiveBrand() ? { 'X-Active-Brand': getActiveBrand() } : {}),
+    },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
+  if (res.status === 401 && getToken() && path !== '/auth/login') {
+    // the session ended (expired, signed out elsewhere, or the account was switched off)
+    setToken('')
+    window.dispatchEvent(new Event('auth:expired'))
+  }
   if (!res.ok) {
     let msg = `${res.status} ${res.statusText}`
     try {

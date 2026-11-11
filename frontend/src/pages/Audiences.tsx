@@ -4,7 +4,7 @@ import { api, fmt } from '../api'
 import type { Audience, Calculation, Overview, Schema, Sync } from '../api'
 import { ErrorBox, PageHead, useAsync } from '../components/ui'
 import { useMe } from '../components/me'
-import { askConfirm, FilterChips, matches, NoResults, Pager, SearchBox, SkeletonRows, sortBy, toast, usePaged, useUrlState } from '../components/kit'
+import { askConfirm, matches, NoResults, Pager, SearchBox, SkeletonRows, sortBy, toast, usePaged, useUrlState } from '../components/kit'
 import { CollectionLayout, Facts, Inspector, ListPane, ListRow, Section, StatTile } from '../components/collection'
 import { Funnel } from '../components/viz'
 import { BrandLogo } from '../components/logos'
@@ -156,7 +156,6 @@ export default function Audiences() {
   const syncs = useAsync(() => api.get<Sync[]>('/syncs'))
   const overview = useAsync(() => api.get<Overview>('/overview'))
   const [q, setQ] = useUrlState('q')
-  const [synced, setSynced] = useUrlState('synced', 'all')
   const [parent, setParent] = useUrlState('parent', 'all')
   const [brand, setBrand] = useUrlState('brand', 'all')
   const [sortKey, setSortKey] = useUrlState('sort', '-updated')
@@ -176,15 +175,14 @@ export default function Audiences() {
   const base = all.filter((a) => (brand === 'all' || String(a.brand_id ?? 'none') === brand)
     && (parent === 'all' || String(a.parent_id) === parent) && matches(q, a.name, a.description, a.parent_name, a.created_by))
   const sort = sortKey.startsWith('-') ? { key: sortKey.slice(1), dir: 'desc' as const } : { key: sortKey, dir: 'asc' as const }
-  const rows = sortBy(base.filter((a) => synced === 'all' || (synced === 'yes' ? (syncsBy.get(a.id)?.length ?? 0) > 0 : !(syncsBy.get(a.id)?.length))), sort, {
+  const rows = sortBy(base, sort, {
     name: (a) => a.name.toLowerCase(), size: (a) => a.last_size, updated: (a) => a.updated_at,
   })
-  const paged = usePaged(rows, PAGE_SIZE, `${q}|${brand}|${parent}|${synced}|${sortKey}`, 'page')
-  const current = all.find((a) => String(a.id) === selected) ?? paged.slice[0] ?? rows[0]
+  const paged = usePaged(rows, PAGE_SIZE, `${q}|${brand}|${parent}|${sortKey}`, 'page')
+  const current = all.find((a) => String(a.id) === selected)
   const schema = useAsync(() => (current ? api.get<Schema>(`/schema?parent_id=${current.parent_id}`) : Promise.resolve(undefined)), [current?.parent_id])
-  const syncedCount = base.filter((a) => (syncsBy.get(a.id)?.length ?? 0) > 0).length
-  const filtered = !!q || synced !== 'all' || parent !== 'all' || brand !== 'all'
-  const clear = () => { setQ(''); setSynced('all'); setParent('all'); setBrand('all') }
+  const filtered = !!q || parent !== 'all' || brand !== 'all'
+  const clear = () => { setQ(''); setParent('all'); setBrand('all') }
 
   return (
     <div className="page wide sg-page">
@@ -194,16 +192,11 @@ export default function Audiences() {
       <ErrorBox error={audiences.error} />
 
       {audiences.loading && !audiences.data ? <SkeletonRows rows={6} /> : !all.length ? <Onboarding canBuild={canBuild} /> : (
-        <CollectionLayout
+        <CollectionLayout open={!!current} onClose={() => setSelected(null)}
           list={
             <ListPane title="All audiences" count={rows.length}
               toolbar={<>
                 <SearchBox value={q} onChange={setQ} placeholder="Search by name, description or owner…" />
-                <FilterChips label="Sent" value={synced as 'all' | 'yes' | 'no'} onChange={setSynced} options={[
-                  { value: 'all', label: 'All', count: base.length },
-                  { value: 'yes', label: 'Sent', count: syncedCount, tone: 'green' },
-                  { value: 'no', label: 'Not sent', count: base.length - syncedCount, tone: 'gray' },
-                ]} />
                 <select className="input sm" value={sortKey} onChange={(e) => setSortKey(e.target.value)} aria-label="Sort">
                   {SORTS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
                 </select>

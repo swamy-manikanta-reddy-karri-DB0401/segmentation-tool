@@ -1,29 +1,15 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, fmt } from '../api'
-import type { AuditEntry, Brand, Destination, RoleBinding, RoleInfo } from '../api'
+import type { AuditEntry, AuthConfig, Brand, Destination, DirectoryGroup, DirectoryResult, DirectoryUser, RoleBinding, RoleInfo, UserRow } from '../api'
 import { Empty, ErrorBox, Field, Modal, PageHead, Toggle, useAsync } from '../components/ui'
 import { useMe } from '../components/me'
 import { askConfirm, FilterChips, matches, NoResults, Pager, SearchBox, SkeletonRows, toast, usePaged, useUrlState } from '../components/kit'
 import { CollectionLayout, Inspector, ListPane, ListRow, Section } from '../components/collection'
+import { byRole, CAPABILITIES, pickOrder, PLATFORM_CAPS, ROLE_TONE, roleRank } from '../ux/capabilities'
 import '../ux/access.css'
-
-const ROLE_TONE: Record<string, string> = { platform_admin: 'violet', brand_admin: 'brand', builder: 'blue', operator: 'amber', viewer: 'gray' }
-const ROLE_ORDER = ['platform_admin', 'brand_admin', 'builder', 'operator', 'viewer']
-
-/** Everything a role can grant, in the words a marketer would use. */
-const CAPABILITIES: { perm: string; label: string }[] = [
-  { perm: 'view', label: 'See audiences, profiles, syncs and run history' },
-  { perm: 'audiences.edit', label: 'Build and change audiences' },
-  { perm: 'traits.manage', label: 'Create and change traits' },
-  { perm: 'syncs.edit', label: 'Set up and change syncs' },
-  { perm: 'syncs.approve', label: 'Approve syncs and publish them' },
-  { perm: 'syncs.run', label: 'Run syncs and pause them' },
-  { perm: 'destinations.manage', label: 'Connect destinations and manage credentials' },
-  { perm: 'governance.manage', label: 'Manage priority lists and destination rules' },
-]
-const PLATFORM_CAPS = ['Connect Databricks sources', 'Change the data model', 'Manage brands, roles and workspace settings']
+import '../ux/auth.css'
 
 const ACTION_LABEL: Record<string, string> = {
   create: 'created', update: 'changed', delete: 'deleted', approve: 'approved', reject: 'sent back', run: 'ran',
@@ -55,11 +41,45 @@ function RoleChip({ role, label }: { role: string; label: string }) {
 
 // ---- grant role ------------------------------------------------------------------------------
 
-function GrantModal({ roles, brands, dests, preset, onClose, onSaved }: {
+/**
+ * Pick a Databricks user (or group) from the workspace directory: a searchable dropdown that narrows as you
+ * type. If the directory can't be read the admin sees why and can still type an email or group name.
+ */
+function DirectoryInput({ kind, value, onChange, placeholder }: { kind: 'users' | 'groups'; value: string; onChange: (v: string) => void; placeholder: string }) {
+  const [items, setItems] = useState<{ value: string; label: string }[]>([])
+  const [error, setError] = useState('')
+  useEffect(() => {
+    let stop = false
+    const t = setTimeout(() => {
+      api.get<DirectoryResult<DirectoryUser & DirectoryGroup>>(`/directory/${kind}?q=${encodeURIComponent(value)}`)
+        .then((r) => {
+          if (stop) return
+          setError(r.error)
+          setItems(r.items.map((i) => (kind === 'users' ? { value: i.email, label: i.name } : { value: i.name, label: '' })))
+        })
+        .catch((e) => { if (!stop) setError((e as Error).message) })
+    }, 250)
+    return () => { stop = true; clearTimeout(t) }
+  }, [kind, value])
+  const id = `ac-dir-${kind}`
+  return (
+    <>
+      <input className="input" value={value} autoFocus list={id} autoComplete="off" onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
+      <datalist id={id}>{items.map((i) => <option key={i.value} value={i.value}>{i.label}</option>)}</datalist>
+      {error
+        ? <div className="small" style={{ color: 'var(--amber)' }}>{error} You can still type {kind === 'users' ? 'an email' : 'a group name'}.</div>
+        : <div className="small muted">Start typing to search your Databricks {kind === 'users' ? 'users by name or email' : 'groups'}.</div>}
+    </>
+  )
+}
+
+function GrantModal({ roles, brands, dests, preset, local, users, onClose, onSaved }: {
   roles: RoleInfo[]; brands: Brand[]; dests: Destination[]; preset?: { type: 'user' | 'group'; name: string }
+  /** Sign-in is by email + password here (not Databricks): grants go to people, not groups. */
+  local?: boolean; users?: string[]
   onClose: () => void; onSaved: (key: string) => void
 }) {
-  const [ptype, setPtype] = useState<'group' | 'user'>(preset?.type ?? 'group')
+  const [ptype, setPtype] = useState<'group' | 'user'>(preset?.type ?? (local ? 'user' : 'group'))
   const [principal, setPrincipal] = useState(preset?.name ?? '')
   const [role, setRole] = useState('viewer')
   const [brandId, setBrandId] = useState<number | ''>(brands[0]?.id ?? '')
@@ -68,20 +88,22 @@ function GrantModal({ roles, brands, dests, preset, onClose, onSaved }: {
   const [saving, setSaving] = useState(false)
   const platform = role === 'platform_admin'
   const brandDests = dests.filter((d) => d.brand_id == null || d.brand_id === brandId)
-  const ordered = [...roles].sort((a, b) => ROLE_ORDER.indexOf(b.role) - ROLE_ORDER.indexOf(a.role))
+  const ordered = pickOrder(roles)
+  const limitsDestinations = !platform && !!roles.find((r) => r.role === role)?.permissions.includes('syncs.run')
   const invalid = !principal.trim() ? (ptype === 'group' ? 'Enter the Databricks group name' : 'Enter the person’s email')
-    : ptype === 'user' && !principal.includes('@') ? 'Use the email they sign in to Databricks with' : null
+    : ptype === 'user' && !principal.includes('@') ? (local ? 'Use the email of their account' : 'Use the email they sign in to Databricks with') : null
   const save = async () => {
     setError(null); setSaving(true)
     try {
       await api.post('/role-bindings', { principal_type: ptype, principal: principal.trim(), role, brand_id: platform ? null : brandId || null,
-                                         destination_ids: role === 'operator' ? destIds : [] })
+                                         destination_ids: limitsDestinations ? destIds : [] })
       toast(`${roles.find((r) => r.role === role)?.label ?? 'Role'} granted to ${principal.trim()}`)
       onSaved(`${ptype}:${ptype === 'user' ? principal.trim().toLowerCase() : principal.trim()}`)
     } catch (e) { setError((e as Error).message) } finally { setSaving(false) }
   }
   return (
-    <Modal wide title="Grant a role" subtitle="Grant roles to Databricks groups so access follows group membership — people join or leave in Databricks, not here."
+    <Modal wide title="Grant a role" subtitle={local ? 'A person can hold several roles, on one brand or many. What they can do is everything their roles allow, combined.'
+      : 'Grant roles to Databricks groups so access follows group membership — people join or leave in Databricks, not here.'}
       onClose={onClose} footer={<>
         {invalid && principal && <span className="small" style={{ color: 'var(--amber)' }}>{invalid}</span>}
         <span className="grow" />
@@ -91,9 +113,16 @@ function GrantModal({ roles, brands, dests, preset, onClose, onSaved }: {
       <div className="ac-grant">
         <div className="stack" style={{ gap: 16 }}>
           <Field label="Who">
-            <Toggle value={ptype} onChange={(v) => setPtype(v)} options={[{ value: 'group', label: 'Databricks group' }, { value: 'user', label: 'One person' }]} />
-            <input className="input" value={principal} autoFocus onChange={(e) => setPrincipal(e.target.value)}
-              placeholder={ptype === 'group' ? 'e.g. cnbc-marketing-admins' : 'e.g. jane.doe@company.com'} />
+            {!local && <Toggle value={ptype} onChange={(v) => setPtype(v)} options={[{ value: 'group', label: 'Databricks group' }, { value: 'user', label: 'One person' }]} />}
+            {local ? (
+              <>
+                <input className="input" value={principal} autoFocus list="ac-user-emails" onChange={(e) => setPrincipal(e.target.value)} placeholder="e.g. jane.doe@company.com" />
+                <datalist id="ac-user-emails">{(users ?? []).map((u) => <option key={u} value={u} />)}</datalist>
+              </>
+            ) : (
+              <DirectoryInput key={ptype} kind={ptype === 'group' ? 'groups' : 'users'} value={principal} onChange={setPrincipal}
+                placeholder={ptype === 'group' ? 'e.g. cnbc-marketing-admins' : 'e.g. jane.doe@company.com'} />
+            )}
           </Field>
           {!platform && (
             <Field label="On which brand" help="They only see brands they have a role on.">
@@ -103,7 +132,7 @@ function GrantModal({ roles, brands, dests, preset, onClose, onSaved }: {
               </select>
             </Field>
           )}
-          {role === 'operator' && (
+          {limitsDestinations && (
             <Field label="Destinations they may run syncs to" help="Leave all unticked to allow every destination of the brand.">
               {brandDests.length ? (
                 <div className="ac-checks">
@@ -139,7 +168,7 @@ function GrantModal({ roles, brands, dests, preset, onClose, onSaved }: {
 
 /** Capability matrix: rows = what you can do, columns = roles. */
 function RoleMatrix({ roles, onClose }: { roles: RoleInfo[]; onClose: () => void }) {
-  const ordered = [...roles].sort((a, b) => ROLE_ORDER.indexOf(b.role) - ROLE_ORDER.indexOf(a.role)).reverse()
+  const ordered = [...roles].sort(byRole)
   const has = (r: RoleInfo, perm: string) => r.role === 'platform_admin' || r.permissions.includes(perm)
   return (
     <Modal wide title="What each role can do" subtitle="Roles are granted per brand. Platform Admins can do everything, on every brand." onClose={onClose}
@@ -191,7 +220,7 @@ function GrantCard({ b, info, destName, onRevoke }: { b: RoleBinding; info?: Rol
 }
 
 function summary(p: Principal, roleLabel: (r: string) => string): string {
-  const parts = [...p.grants].sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role))
+  const parts = [...p.grants].sort((a, b) => roleRank(a.role) - roleRank(b.role))
     .map((g) => g.role === 'platform_admin' ? 'Platform Admin on everything' : `${roleLabel(g.role)} for ${g.brand_name ?? 'every brand'}`)
   const who = p.type === 'group' ? 'Everyone in this Databricks group is' : 'This person is'
   return `${who} ${parts.join(', ')}.`
@@ -202,6 +231,10 @@ function PeopleTab({ openMatrix }: { openMatrix: () => void }) {
   const roles = useAsync(() => api.get<RoleInfo[]>('/roles'))
   const brands = useAsync(() => api.get<Brand[]>('/brands'))
   const dests = useAsync(() => api.get<Destination[]>('/destinations'))
+  const { me } = useMe()
+  const local = me?.auth_mode === 'local'
+  const users = useAsync(() => (local ? api.get<UserRow[]>('/users') : Promise.resolve([] as UserRow[])), [local])
+  const userEmails = (users.data ?? []).map((u) => u.email)
   const [q, setQ] = useUrlState('q')
   const [kind, setKind] = useUrlState('kind', 'all')
   const [roleF, setRoleF] = useUrlState('role')
@@ -225,7 +258,7 @@ function PeopleTab({ openMatrix }: { openMatrix: () => void }) {
     && (!roleF || p.grants.some((g) => g.role === roleF))
     && (!brandF || p.grants.some((g) => (brandF === 'all' ? g.brand_id == null : String(g.brand_id) === brandF))))
   const paged = usePaged(rows, 25, `${q}|${kind}|${roleF}|${brandF}`)
-  const selected = principals.find((p) => p.key === sel) ?? rows[0]
+  const selected = principals.find((p) => p.key === sel)
   const filtered = !!(q || kind !== 'all' || roleF || brandF)
 
   const revoke = async (b: RoleBinding) => {
@@ -242,10 +275,12 @@ function PeopleTab({ openMatrix }: { openMatrix: () => void }) {
     return (
       <div className="card">
         <Empty title="Nobody has a role yet" action={<button className="btn primary" onClick={() => setGrant({})} disabled={!roles.data || !brands.data}>Grant the first role</button>}>
-          Grant roles to Databricks groups — e.g. “cnbc-marketing-admins” → Brand Marketing Admin for CNBC — so access follows your workspace’s group membership.
-          Platform Admins listed in the app’s configuration already have full access.
+          {local
+            ? <>Add people under <b>Users</b>, then grant them roles here, on one brand or several. Admins already have full access to every brand.</>
+            : <>Grant roles to Databricks groups — e.g. “cnbc-marketing-admins” → Brand Marketing Admin for CNBC — so access follows your workspace’s group membership.
+              Platform Admins listed in the app’s configuration already have full access.</>}
         </Empty>
-        {grant && roles.data && brands.data && <GrantModal roles={roles.data} brands={brands.data} dests={dests.data ?? []} onClose={() => setGrant(null)}
+        {grant && roles.data && brands.data && <GrantModal roles={roles.data} brands={brands.data} dests={dests.data ?? []} local={local} users={userEmails} onClose={() => setGrant(null)}
           onSaved={(k) => { setGrant(null); bindings.reload(); setSel(k) }} />}
       </div>
     )
@@ -253,7 +288,7 @@ function PeopleTab({ openMatrix }: { openMatrix: () => void }) {
 
   return (<>
     <ErrorBox error={bindings.error} />
-    <CollectionLayout
+    <CollectionLayout open={!!selected} onClose={() => setSel('')}
       list={
         <ListPane title="People & groups" count={principals.length}
           actions={<button className="btn ghost sm" onClick={openMatrix}>Role guide</button>}
@@ -266,7 +301,7 @@ function PeopleTab({ openMatrix }: { openMatrix: () => void }) {
             ]} />
             <select className="input sm ac-select" value={roleF} onChange={(e) => setRoleF(e.target.value)} aria-label="Role">
               <option value="">Any role</option>
-              {ROLE_ORDER.map((r) => <option key={r} value={r}>{label(r)}</option>)}
+              {[...(roles.data ?? [])].sort(byRole).map((r) => <option key={r.role} value={r.role}>{r.label}</option>)}
             </select>
             {(brands.data?.length ?? 0) > 1 && (
               <select className="input sm ac-select" value={brandF} onChange={(e) => setBrandF(e.target.value)} aria-label="Brand">
@@ -278,7 +313,7 @@ function PeopleTab({ openMatrix }: { openMatrix: () => void }) {
           </>}
           footer={<Pager page={paged.page} pages={paged.pages} total={rows.length} pageSize={25} onPage={paged.setPage} noun={kind === 'group' ? 'group' : kind === 'user' ? 'person' : 'principal'} />}>
           {paged.slice.map((p) => {
-            const roleSet = [...new Set(p.grants.map((g) => g.role))].sort((a, b) => ROLE_ORDER.indexOf(a) - ROLE_ORDER.indexOf(b))
+            const roleSet = [...new Set(p.grants.map((g) => g.role))].sort((a, b) => roleRank(a) - roleRank(b))
             const brandsList = [...new Set(p.grants.map((g) => (g.role === 'platform_admin' ? 'Platform' : g.brand_name ?? 'Every brand')))]
             return (
               <ListRow key={p.key} selected={selected?.key === p.key} onSelect={() => setSel(p.key)} leading={<PrincipalIcon p={p} />}
@@ -298,7 +333,7 @@ function PeopleTab({ openMatrix }: { openMatrix: () => void }) {
           )}
           <Section title={`Access ${selected.grants.length > 1 ? `· ${selected.grants.length} roles` : ''}`}>
             <div className="stack" style={{ gap: 10 }}>
-              {[...selected.grants].sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role)).map((g) => (
+              {[...selected.grants].sort((a, b) => roleRank(a.role) - roleRank(b.role)).map((g) => (
                 <GrantCard key={g.id} b={g} info={roles.data?.find((r) => r.role === g.role)} destName={destName} onRevoke={() => revoke(g)} />
               ))}
             </div>
@@ -306,10 +341,235 @@ function PeopleTab({ openMatrix }: { openMatrix: () => void }) {
         </Inspector>
       ) : <Inspector empty={<div>Select a person or group to see what they can do.</div>} />} />
     {grant && roles.data && brands.data && (
-      <GrantModal roles={roles.data} brands={brands.data} dests={dests.data ?? []} preset={grant.preset} onClose={() => setGrant(null)}
+      <GrantModal roles={roles.data} brands={brands.data} dests={dests.data ?? []} preset={grant.preset} local={local} users={userEmails} onClose={() => setGrant(null)}
         onSaved={(k) => { setGrant(null); bindings.reload(); setSel(k) }} />
     )}
   </>)
+}
+
+// ---- users (email + password sign-in) ------------------------------------------------------------
+
+function UserModal({ existing, min, onClose, onSaved }: { existing?: UserRow; min: number; onClose: () => void; onSaved: () => void }) {
+  const [email, setEmail] = useState(existing?.email ?? '')
+  const [name, setName] = useState(existing?.name ?? '')
+  const [password, setPassword] = useState('')
+  const [admin, setAdmin] = useState(existing?.is_admin ?? false)
+  const [active, setActive] = useState(existing?.active ?? true)
+  const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const short = password.length > 0 && password.length < min
+  const invalid = existing ? short : !email.includes('@') || password.length < min
+  const save = async () => {
+    setError(null); setSaving(true)
+    try {
+      if (existing) {
+        await api.put(`/users/${existing.id}`, { name, is_admin: admin, active, ...(password ? { password } : {}) })
+        toast(password ? 'Saved. They’ll be signed out and need the new password.' : 'User updated')
+      } else {
+        await api.post('/users', { email, name, password, is_admin: admin })
+        toast(`${email.trim().toLowerCase()} can now sign in. Give them a role so they can see a brand.`)
+      }
+      onSaved()
+    } catch (e) { setError((e as Error).message) } finally { setSaving(false) }
+  }
+  return (
+    <Modal title={existing ? `Edit ${existing.name || existing.email}` : 'Add a user'}
+      subtitle={existing ? existing.email : 'They sign in with this email and password. Add roles afterwards to give them access to brands.'}
+      onClose={onClose} footer={<>
+        {short && <span className="small" style={{ color: 'var(--amber)' }}>Use at least {min} characters</span>}
+        <span className="grow" />
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn primary" onClick={save} disabled={invalid || saving}>{saving ? 'Saving…' : existing ? 'Save' : 'Add user'}</button>
+      </>}>
+      <div className="stack" style={{ gap: 14 }}>
+        {!existing && <Field label="Email"><input className="input" type="email" autoFocus value={email} placeholder="jane.doe@company.com" onChange={(e) => setEmail(e.target.value)} /></Field>}
+        <Field label="Name (optional)"><input className="input" value={name} placeholder="Jane Doe" onChange={(e) => setName(e.target.value)} /></Field>
+        <Field label={existing ? 'New password' : 'Password'} help={existing ? 'Leave empty to keep the current one. Setting one signs them out everywhere.' : `At least ${min} characters. They can change it under My access.`}>
+          <input className="input" type="text" autoComplete="off" value={password} onChange={(e) => setPassword(e.target.value)} />
+        </Field>
+        <label className="rl-perm" style={{ alignItems: 'center' }}>
+          <input type="checkbox" checked={admin} onChange={(e) => setAdmin(e.target.checked)} />
+          <span><b>Admin</b><small>Full access to every brand, and can manage users, roles, brands and settings.</small></span>
+        </label>
+        {existing && (
+          <label className="rl-perm" style={{ alignItems: 'center' }}>
+            <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
+            <span><b>Can sign in</b><small>Untick to switch the account off without deleting it.</small></span>
+          </label>
+        )}
+        <ErrorBox error={error} />
+      </div>
+    </Modal>
+  )
+}
+
+function UsersTab({ min }: { min: number }) {
+  const users = useAsync(() => api.get<UserRow[]>('/users'))
+  const roles = useAsync(() => api.get<RoleInfo[]>('/roles'))
+  const brands = useAsync(() => api.get<Brand[]>('/brands'))
+  const dests = useAsync(() => api.get<Destination[]>('/destinations'))
+  const { me } = useMe()
+  const [, setParams] = useSearchParams()
+  const [q, setQ] = useUrlState('q')
+  const [modal, setModal] = useState<{ existing?: UserRow } | null>(null)
+  const [grant, setGrant] = useState<UserRow | null>(null)
+  const rows = (users.data ?? []).filter((u) => matches(q, u.email, u.name, ...u.roles.map((r) => r.label), ...u.roles.map((r) => r.brand_name)))
+
+  const remove = async (u: UserRow) => {
+    if (!await askConfirm({ title: `Delete ${u.email}?`, confirmLabel: 'Delete user', danger: true,
+      body: 'Their account and all of their role grants are removed. This can’t be undone.' })) return
+    try { await api.del(`/users/${u.id}`); users.reload(); toast(`${u.email} deleted`) } catch (e) { toast((e as Error).message, 'error') }
+  }
+
+  return (
+    <div className="stack" style={{ gap: 14 }}>
+      <div className="ac-bar">
+        <SearchBox value={q} onChange={setQ} placeholder="Search people, roles, brands…" />
+        <span className="grow" />
+        <button className="btn primary" onClick={() => setModal({})}>+ Add user</button>
+      </div>
+      <ErrorBox error={users.error} />
+      {users.loading && !users.data ? <SkeletonRows rows={4} cols={4} /> : (
+        <div className="card table-wrap">
+          <table className="table">
+            <thead><tr><th>User</th><th>Access</th><th>Status</th><th /></tr></thead>
+            <tbody>
+              {rows.map((u) => (
+                <tr key={u.id}>
+                  <td>
+                    <div className="row" style={{ gap: 10 }}>
+                      <PrincipalIcon p={{ type: 'user', name: u.name || u.email }} />
+                      <div style={{ minWidth: 0 }}><strong>{u.name || u.email.split('@')[0]}</strong>{u.email === me?.email && <span className="muted"> (you)</span>}<div className="small muted">{u.email}</div></div>
+                    </div>
+                  </td>
+                  <td style={{ whiteSpace: 'normal' }}>
+                    <span className="us-flags">
+                      {u.is_admin && <span className="ac-role violet">Admin · every brand</span>}
+                      {u.roles.map((r) => <span key={r.id} className={`ac-role ${ROLE_TONE[r.role] ?? 'gray'}`}>{r.label} · {r.brand_name ?? 'every brand'}</span>)}
+                      {!u.is_admin && !u.roles.length && <span className="small muted">No role yet. They can’t see any brand.</span>}
+                    </span>
+                  </td>
+                  <td>
+                    <span className="us-flags">{u.active ? <span className="small">Active</span> : <span className="us-off">Off</span>}</span>
+                    <div className="small muted">{u.last_login_at ? `Signed in ${fmt.ago(u.last_login_at)}` : 'Never signed in'}</div>
+                  </td>
+                  <td>
+                    <span className="us-actions">
+                      <button className="btn ghost sm" onClick={() => setGrant(u)} disabled={!roles.data || !brands.data}>+ Role</button>
+                      {u.roles.length > 0 && <button className="btn ghost sm" onClick={() => setParams({ tab: 'people', who: `user:${u.email}` })}>Manage roles</button>}
+                      <button className="btn ghost sm" onClick={() => setModal({ existing: u })}>Edit</button>
+                      <button className="btn ghost sm danger" onClick={() => remove(u)} disabled={u.email === me?.email}>Delete</button>
+                    </span>
+                  </td>
+                </tr>
+              ))}
+              {!rows.length && <tr><td colSpan={4}><NoResults what="users" onClear={() => setQ('')} /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {modal && <UserModal existing={modal.existing} min={min} onClose={() => setModal(null)} onSaved={() => { setModal(null); users.reload() }} />}
+      {grant && roles.data && brands.data && (
+        <GrantModal local roles={roles.data} brands={brands.data} dests={dests.data ?? []} preset={{ type: 'user', name: grant.email }} users={(users.data ?? []).map((u) => u.email)}
+          onClose={() => setGrant(null)} onSaved={() => { setGrant(null); users.reload() }} />
+      )}
+    </div>
+  )
+}
+
+// ---- custom roles --------------------------------------------------------------------------------
+
+function RoleModal({ existing, onClose, onSaved }: { existing?: RoleInfo; onClose: () => void; onSaved: () => void }) {
+  const [label, setLabel] = useState(existing?.label ?? '')
+  const [description, setDescription] = useState(existing?.description ?? '')
+  const [perms, setPerms] = useState<string[]>(existing?.permissions ?? ['view'])
+  const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const save = async () => {
+    setError(null); setSaving(true)
+    try {
+      if (existing) await api.put(`/roles/${existing.role}`, { label, description, permissions: perms })
+      else await api.post('/roles', { label, description, permissions: perms })
+      toast(existing ? 'Role updated. Everyone with it gets the change straight away.' : `Role ${label.trim()} created. Grant it to people from Users.`)
+      onSaved()
+    } catch (e) { setError((e as Error).message) } finally { setSaving(false) }
+  }
+  return (
+    <Modal wide title={existing ? `Edit ${existing.label}` : 'New role'} subtitle="Pick exactly what this role allows. It’s granted per brand, and a person can hold several roles."
+      onClose={onClose} footer={<>
+        <span className="grow" />
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn primary" onClick={save} disabled={!label.trim() || saving}>{saving ? 'Saving…' : existing ? 'Save' : 'Create role'}</button>
+      </>}>
+      <div className="stack" style={{ gap: 14 }}>
+        <Field label="Role name"><input className="input" autoFocus value={label} placeholder="e.g. Audience reviewer" onChange={(e) => setLabel(e.target.value)} /></Field>
+        <Field label="Description (optional)"><input className="input" value={description} placeholder="What this role is for" onChange={(e) => setDescription(e.target.value)} /></Field>
+        <Field label="What it can do">
+          <div className="rl-perms">
+            {CAPABILITIES.map((c) => {
+              const locked = c.perm === 'view'
+              const on = locked || perms.includes(c.perm)
+              return (
+                <label key={c.perm} className={`rl-perm ${on ? 'on' : ''} ${locked ? 'locked' : ''}`}>
+                  <input type="checkbox" checked={on} disabled={locked}
+                    onChange={(e) => setPerms(e.target.checked ? [...perms, c.perm] : perms.filter((p) => p !== c.perm))} />
+                  <span>{c.label}{locked && <small>Always included. Without it the person couldn’t see the brand.</small>}</span>
+                </label>
+              )
+            })}
+          </div>
+        </Field>
+        <div className="small muted">Managing users, roles, brands, sources and the data model stay with admins. A role can’t grant those.</div>
+        <ErrorBox error={error} />
+      </div>
+    </Modal>
+  )
+}
+
+function RolesTab() {
+  const roles = useAsync(() => api.get<RoleInfo[]>('/roles'))
+  const [modal, setModal] = useState<{ existing?: RoleInfo } | null>(null)
+  const list = [...(roles.data ?? [])].sort(byRole)
+  const remove = async (r: RoleInfo) => {
+    if (!await askConfirm({ title: `Delete the role “${r.label}”?`, confirmLabel: 'Delete role', danger: true,
+      body: 'A role that is still granted to someone can’t be deleted. Revoke those grants first.' })) return
+    try { await api.del(`/roles/${r.role}`); roles.reload(); toast(`${r.label} deleted`) } catch (e) { toast((e as Error).message, 'error') }
+  }
+  return (
+    <div className="stack" style={{ gap: 14 }}>
+      <div className="ac-bar">
+        <span className="small muted">Built-in roles are fixed. Create your own for any other mix of permissions.</span>
+        <span className="grow" />
+        <button className="btn primary" onClick={() => setModal({})}>+ New role</button>
+      </div>
+      <ErrorBox error={roles.error} />
+      {roles.loading && !roles.data ? <SkeletonRows rows={3} cols={3} /> : (
+        <div className="rl-cards">
+          {list.map((r) => {
+            const perms = new Set(r.permissions)
+            const platform = r.role === 'platform_admin'
+            return (
+              <article key={r.role} className="card rl-card">
+                <header><RoleChip role={r.role} label={r.label} />{r.custom ? <span className="ac-tag">custom</span> : <span className="small muted">built-in</span>}</header>
+                {r.description && <p>{r.description}</p>}
+                <ul className="ac-caps" style={{ padding: 0 }}>
+                  {CAPABILITIES.filter((c) => platform || perms.has(c.perm)).map((c) => <li key={c.perm} className="yes"><span aria-hidden="true">✓</span>{c.label}</li>)}
+                  {platform && PLATFORM_CAPS.map((c) => <li key={c} className="yes"><span aria-hidden="true">✓</span>{c}</li>)}
+                </ul>
+                {r.custom && (
+                  <footer>
+                    <button className="btn ghost sm" onClick={() => setModal({ existing: r })}>Edit</button>
+                    <button className="btn ghost sm danger" onClick={() => remove(r)}>Delete</button>
+                  </footer>
+                )}
+              </article>
+            )
+          })}
+        </div>
+      )}
+      {modal && <RoleModal existing={modal.existing} onClose={() => setModal(null)} onSaved={() => { setModal(null); roles.reload() }} />}
+    </div>
+  )
 }
 
 // ---- brands ------------------------------------------------------------------------------------
@@ -496,21 +756,31 @@ export default function Access() {
   const me = useMe()
   const [matrix, setMatrix] = useState(false)
   const roles = useAsync(() => api.get<RoleInfo[]>('/roles'))
+  const cfg = useAsync(() => api.get<AuthConfig>('/auth/config'))
+  const local = me.me?.auth_mode === 'local'
   const raw = params.get('tab')
-  const tab = raw === 'brands' || raw === 'activity' ? raw : 'people'
+  type Tab = 'users' | 'people' | 'roles' | 'brands' | 'activity'
+  const known: Tab[] = ['users', 'people', 'roles', 'brands', 'activity']
+  const tab: Tab = known.includes(raw as Tab) && (raw !== 'users' || local) ? (raw as Tab) : local ? 'users' : 'people'
   if (me.me && !me.canPlatform('access.manage')) {
-    return <div className="page"><Empty title="Platform Admins only">Ask a Platform Admin to change brands or roles.</Empty></div>
+    return <div className="page"><Empty title="Platform Admins only">Ask a Platform Admin to change users, brands or roles.</Empty></div>
   }
-  const tabs: [typeof tab, string][] = [['people', 'People & roles'], ['brands', 'Brands'], ['activity', 'Activity']]
+  const tabs: [Tab, string][] = [
+    ...(local ? [['users', 'Users'] as [Tab, string]] : []),
+    ['people', local ? 'Role grants' : 'People & roles'], ['roles', 'Roles'], ['brands', 'Brands'], ['activity', 'Activity'],
+  ]
   return (
     <div className="page wide ac-page">
-      <PageHead title="Access" subtitle="Who can see and change what. People sign in with Databricks; roles are granted per brand, ideally to Databricks groups." />
+      <PageHead title="Access" subtitle={local
+        ? 'Add people, give them roles on the brands they work on, and create custom roles. Admins have full access to every brand.'
+        : 'Who can see and change what. People sign in with Databricks; roles are granted per brand, ideally to Databricks groups.'} />
       <div className="tabs ac-tabs" role="tablist">
         {tabs.map(([t, l]) => (
           <button key={t} role="tab" aria-selected={tab === t} className={`tab ${tab === t ? 'active' : ''}`} onClick={() => setParams({ tab: t })}>{l}</button>
         ))}
       </div>
-      {tab === 'people' ? <PeopleTab openMatrix={() => setMatrix(true)} /> : tab === 'brands' ? <BrandsTab /> : <ActivityTab />}
+      {tab === 'users' ? <UsersTab min={cfg.data?.min_password ?? 8} /> : tab === 'people' ? <PeopleTab openMatrix={() => setMatrix(true)} />
+        : tab === 'roles' ? <RolesTab /> : tab === 'brands' ? <BrandsTab /> : <ActivityTab />}
       {matrix && roles.data && <RoleMatrix roles={roles.data} onClose={() => setMatrix(false)} />}
     </div>
   )

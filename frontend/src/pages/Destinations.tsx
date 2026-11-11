@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { api } from '../api'
 import type { Destination, DestinationType, Sync } from '../api'
@@ -298,8 +298,7 @@ export default function Destinations() {
   const kinds = [...new Set(all.map((d) => d.type))]
   const brands = [...new Set(all.map((d) => d.brand_id ?? null))]
   const needs = all.filter((d) => d.configured === false).length
-  const selected = all.find((d) => String(d.id) === sel) ?? rows[0]
-  useEffect(() => { if (!sel && rows[0]) setSel(String(rows[0].id)) }, [sel, rows]) // eslint-disable-line react-hooks/exhaustive-deps
+  const selected = all.find((d) => String(d.id) === sel)
 
   return (
     <div className="page wide">
@@ -307,7 +306,7 @@ export default function Destinations() {
         actions={canAdd ? <button className="btn primary" onClick={() => setModal({})} disabled={!types.data}>+ Add destination</button> : undefined} />
       <ErrorBox error={dests.error || types.error} />
       {dests.loading && !dests.data ? <SkeletonRows rows={3} cols={3} /> : all.length ? (
-        <CollectionLayout
+        <CollectionLayout open={!!selected} onClose={() => setSel('')}
           list={
             <ListPane title="Connected tools" count={all.length}
               toolbar={<>

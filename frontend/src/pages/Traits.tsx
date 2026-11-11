@@ -227,7 +227,7 @@ export default function Traits() {
     name: (t) => t.name.toLowerCase(), used: (t) => { const u = usage(t); return u.audiences.length + u.syncs.length }, updated: (t) => t.updated_at ?? null,
   })
   const paged = usePaged(rows, 14, `${q}|${method}|${sortKey}|${s?.parent?.id}`, 'page')
-  const current = all.find((t) => String(t.id) === selected) ?? paged.slice[0] ?? rows[0]
+  const current = all.find((t) => String(t.id) === selected)
   const methodsUsed = METHODS.filter((m) => all.some((t) => t.method === m.value))
   const clear = () => { setQ(''); setMethod('all') }
 
@@ -258,7 +258,7 @@ export default function Traits() {
               : <div className="small faint">Brand Marketing Admins can create traits.</div>}
           </div>
         ) : (
-          <CollectionLayout
+          <CollectionLayout open={!!current} onClose={() => setSelected(null)}
             list={
               <ListPane title={s.parents.length > 1 ? `Traits for ${s.parent.name}` : 'All traits'} count={rows.length}
                 toolbar={<>

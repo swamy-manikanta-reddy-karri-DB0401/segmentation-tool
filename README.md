@@ -25,6 +25,28 @@ and in another terminal `cd frontend; npm run dev` → http://localhost:5173 (pr
 Configuration lives in `.env` (see `.env.example`): workspace host, token, SQL warehouse ID,
 and `CDP_STATE_SCHEMA` — a schema the token can write to, used for sync snapshots.
 
+## Sign-in and access
+
+* **Deployed as a Databricks App:** people are identified by Databricks (the Apps proxy). Nothing below applies.
+* **Locally (and any non-Databricks run):** people sign in with **email and password**. The first start creates an
+  admin, `admin@local.dev` / `admin12345` unless `CDP_ADMIN_EMAIL` / `CDP_ADMIN_PASSWORD` are set. Change it under
+  **My access**. Sessions last 12 hours (`CDP_SESSION_HOURS`). Passwords are stored as salted scrypt hashes.
+  `CDP_LOCAL_AUTH=0` switches sign-in off (open dev mode with the "Preview as" persona picker).
+* **Admins** have full access to every brand and manage everything under **Access**: add users (email, name,
+  password, admin or not), switch accounts off, reset passwords, create **custom roles** (any mix of the brand
+  permissions) and grant roles per brand.
+* **A person can hold several roles**, on one brand or many; what they can do is everything their roles allow,
+  combined. Everyone sees their own roles and every permission they have under **My access**.
+* **Granting access from the Databricks directory:** when granting a role, the "who" field is a searchable
+  dropdown of the workspace's users (name or email) and groups, read through the app's Databricks connection.
+  If the directory can't be read the dialog says why and you can still type an email or group name.
+* **Brand switcher** (sidebar, under the Databricks status): people with roles on several brands pick the brand
+  they're working in. The whole app then shows only that brand's data and only the permissions their role on
+  that brand allows (a role on another brand doesn't carry over). Admins and brand-wide roles also get "All
+  brands". The choice is sent as the `X-Active-Brand` header and checked server-side, so it can't be used to
+  reach a brand the person has no role on. **My access** shows what every role allows on every brand.
+* Custom roles carry brand permissions only. Sources, the data model, users, roles and brands stay with admins.
+
 ## How it works
 
 | Part | Where | What it does |

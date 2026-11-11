@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -13,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import access, alerts, targeting, audiences, catalog, config, connection, db, destinations, insights, scheduler, sync_engine
+from . import access, alerts, auth, targeting, audiences, catalog, config, connection, db, destinations, insights, routes_auth, scheduler, sync_engine
 from .compiler import CompileError, Compiler, source, trait_type
 from .databricks import DatabricksError, client, reset_client
 from .scheduler import ScheduleError
@@ -31,6 +32,7 @@ async def lifespan(_: FastAPI):
     db.conn()
     connection.seed()
     access.seed()
+    auth.seed()
     alerts.migrate_legacy()
     asyncio.get_running_loop().run_in_executor(None, access.check_group_lookup)  # self-test, result in settings
     scheduler.recover_interrupted_runs()
@@ -41,6 +43,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="MediaMint CDP", lifespan=lifespan, dependencies=[Depends(access.bind_user)])
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_methods=["*"], allow_headers=["*"])
+app.include_router(routes_auth.router)
 
 
 @app.exception_handler(CompileError)
@@ -1220,36 +1223,46 @@ def put_targeting_clients(body: dict = Body(...)):
 
 # ---- access control: me, brands, roles --------------------------------------------------------
 
-def _brands_out() -> list[dict]:
+def _brands_out(scoped: bool = True) -> list[dict]:
+    """Brands the caller can see. `scoped`: only the one they've switched to; otherwise every brand they could switch to."""
     u = access.current()
     rows = db.query("SELECT b.*, (SELECT COUNT(*) FROM models m WHERE m.brand_id = b.id AND m.kind = 'parent') AS parent_count, "
                     "(SELECT COUNT(*) FROM destinations d WHERE d.brand_id = b.id) AS destination_count FROM brands b ORDER BY name")
-    return [b for b in rows if u.sees(b["id"])]
+    allowed = u.brands() if scoped else u.all_brands()
+    return [b for b in rows if allowed is None or b["id"] in allowed]
 
 
 @app.get("/api/me")
 def me():
     u = access.current()
-    brands = _brands_out()
+    brands = _brands_out()  # the brand they're working in now (all of theirs when they've chosen "all")
     perms = sorted(access.ALL_BRAND_PERMS)
+    brand_names = {b["id"]: b["name"] for b in db.query("SELECT id, name FROM brands")}
+    unscoped = dataclasses.replace(u, active_brand=None)  # what their roles give them on each brand, switch aside
     return {"email": u.email, "name": u.name, "groups": u.groups, "platform_admin": u.platform_admin,
-            "roles": [{"role": b.role, "label": access.ROLES[b.role]["label"], "brand_id": b.brand_id,
-                       "destination_ids": b.destination_ids} for b in u.bindings],
+            "active_brand_id": u.active_brand,
+            "switch": {"brands": [{"id": b["id"], "name": b["name"]} for b in access.switchable_brands(u)],
+                       "all": access.sees_every_brand(u)},
+            "all_brands_access": [{"id": b["id"], "name": b["name"], "can": {p: unscoped.can(p, b["id"]) for p in perms}}
+                                  for b in access.switchable_brands(u)],
+            "roles": [{"role": b.role, "label": b.label or access.role_label(b.role), "brand_id": b.brand_id,
+                       "brand_name": brand_names.get(b.brand_id) if b.brand_id is not None else None,
+                       "destination_ids": b.destination_ids, "permissions": sorted(b.perms)} for b in u.bindings],
             "platform": {p: u.can(p) for p in sorted(access.PLATFORM_PERMS)},
             "brands": [{"id": b["id"], "name": b["name"], "can": {p: u.can(p, b["id"]) for p in perms}} for b in brands],
             "in_databricks_app": access.IN_DATABRICKS_APP,
+            "auth_mode": routes_auth._mode(),
             "group_lookup": db.get_setting("group_lookup") if u.platform_admin else None}
 
 
 @app.get("/api/roles")
 def list_roles():
-    return [{"role": k, **v, "permissions": sorted(access.BRAND_PERMS.get(k, access.ALL_BRAND_PERMS | access.PLATFORM_PERMS))}
-            for k, v in access.ROLES.items()]
+    return access.all_roles()
 
 
 @app.get("/api/brands")
 def list_brands():
-    return _brands_out()
+    return _brands_out(scoped=False)  # brand management isn't narrowed by the brand switcher
 
 
 @app.post("/api/brands")
@@ -1298,14 +1311,14 @@ def list_role_bindings():
 def create_role_binding(body: dict = Body(...)):
     access.require("access.manage")
     role = body.get("role")
-    if role not in access.ROLES:
+    if not access.role_exists(role or ""):
         raise ValueError("Choose a role")
     ptype = body.get("principal_type")
     principal = (body.get("principal") or "").strip()
     if ptype not in ("user", "group") or not principal:
         raise ValueError("Choose a Databricks user (email) or group name")
     brand_id = None if role == "platform_admin" else _brand(body.get("brand_id"))
-    dest_ids = [int(x) for x in body.get("destination_ids") or []] if role == "operator" else []
+    dest_ids = [int(x) for x in body.get("destination_ids") or []] if "syncs.run" in access.role_perms(role) else []
     for d in dest_ids:
         if access.brand_of_destination(d) not in (None, brand_id) and brand_id is not None:
             raise ValueError("Operators can only be limited to destinations of the same brand")
@@ -1335,8 +1348,8 @@ def audit_log(limit: int = 100):
 @app.get("/api/dev/personas")
 def dev_personas():
     """Local development only: users with role grants, to preview the app as them."""
-    if access.IN_DATABRICKS_APP:
-        raise HTTPException(404, "Not available")
+    if access.IN_DATABRICKS_APP or auth.local_enabled():
+        raise HTTPException(404, "Not available")  # personas exist only when sign-in is switched off
     return sorted({r["principal"] for r in db.query("SELECT principal FROM role_bindings WHERE principal_type = 'user'")})
 
 

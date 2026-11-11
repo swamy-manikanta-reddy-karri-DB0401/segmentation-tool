@@ -5,6 +5,7 @@ import type { Audience, Destination, DestinationRule, GroupNode, PriorityList, S
 import { BuilderProvider, conditionText, GroupEditor } from '../components/builder/ConditionEditor'
 import { Empty, ErrorBox, Field, Modal, PageHead, useAsync } from '../components/ui'
 import { useMe } from '../components/me'
+import { SHOW_PRIORITY_LISTS } from '../features'
 import { askConfirm, FilterChips, matches, NoResults, Pager, SearchBox, SkeletonRows, toast, usePaged, useUrlState } from '../components/kit'
 import { CollectionLayout, Inspector, ListPane, ListRow, Section } from '../components/collection'
 import { BrandLogo } from '../components/logos'
@@ -180,7 +181,7 @@ export default function Governance() {
   const syncs = useAsync(() => api.get<Sync[]>('/syncs'))
   const [ruleModal, setRuleModal] = useState<{ existing?: DestinationRule } | null>(null)
   const [listModal, setListModal] = useState<{ existing?: PriorityList } | null>(null)
-  const tab = params.get('tab') === 'priority' ? 'priority' : 'rules'
+  const tab = SHOW_PRIORITY_LISTS && params.get('tab') === 'priority' ? 'priority' : 'rules'
   const [q, setQ] = useUrlState('q')
   const [dest, setDest] = useUrlState('dest', 'all')
   const [selected, setSelected] = useSelected()
@@ -225,8 +226,8 @@ export default function Governance() {
     </select>
   )
 
-  const curRule = tab === 'rules' ? (myRules.find((r) => String(r.id) === selected) ?? pagedRules.slice[0] ?? ruleRows[0]) : undefined
-  const curList = tab === 'priority' ? (myLists.find((l) => String(l.id) === selected) ?? pagedLists.slice[0] ?? listRows[0]) : undefined
+  const curRule = tab === 'rules' ? myRules.find((r) => String(r.id) === selected) : undefined
+  const curList = tab === 'priority' ? myLists.find((l) => String(l.id) === selected) : undefined
 
   return (
     <BuilderProvider value={{ schema: s, audiences: audiences.data ?? [] }}>
@@ -251,7 +252,7 @@ export default function Governance() {
                 : <div className="small faint">{brandDests.length ? 'Brand Marketing Admins can add rules.' : 'Add a destination first.'}</div>}
             </div>
           ) : (
-            <CollectionLayout
+            <CollectionLayout open={!!curRule} onClose={() => setSelected(null)}
               list={
                 <ListPane title="Rules" count={ruleRows.length}
                   toolbar={<>
@@ -308,7 +309,7 @@ export default function Governance() {
                 : <div className="small faint">{gov ? '' : 'Brand Marketing Admins can create priority lists.'}</div>}
             </div>
           ) : (
-            <CollectionLayout
+            <CollectionLayout open={!!curList} onClose={() => setSelected(null)}
               list={
                 <ListPane title="Priority lists" count={listRows.length}
                   toolbar={<><SearchBox value={q} onChange={setQ} placeholder="Search lists or their audiences…" />{parentSelect}</>}

@@ -4,10 +4,12 @@ Identity
 * Deployed as a Databricks App: the user's identity arrives in the X-Forwarded-Email / X-Forwarded-User
   headers added by the Databricks Apps proxy. Their Databricks groups are looked up (cached) so roles can be
   granted to groups, the way workspace admins already manage access.
-* Local development (no Apps proxy): the X-Dev-User header picks a test persona; without it you are a
-  Platform Admin.
+* Anywhere else: people sign in with email and password (auth.py). The first user is an admin; admins have
+  full access to every brand and manage users and roles. With CDP_LOCAL_AUTH=0 sign-in is off and the
+  X-Dev-User header picks a test persona; without it you are a Platform Admin.
 
-Roles (per brand, granted to a user or a Databricks group)
+Roles (per brand, granted to a user or a Databricks group). A person can hold several; their permissions add up.
+Admins can also define custom roles: any mix of the brand permissions below.
 * platform_admin  everything, incl. Databricks sources and the data model (schema)
 * brand_admin     audiences, traits, destinations, governance; approves and runs syncs
 * builder         audiences and sync drafts; syncs go live only after an admin approves them
@@ -28,7 +30,7 @@ from dataclasses import dataclass, field
 from fastapi import HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
-from . import db
+from . import auth, db
 
 ROLES = {
     "platform_admin": {"label": "Platform Admin",
@@ -59,6 +61,8 @@ class Binding:
     role: str
     brand_id: int | None
     destination_ids: list[int] = field(default_factory=list)
+    perms: set[str] = field(default_factory=set)  # what this role grants (built-in or custom)
+    label: str = ""
 
 
 @dataclass
@@ -69,6 +73,9 @@ class User:
     bindings: list[Binding] = field(default_factory=list)
     platform_admin: bool = False
     system: bool = False  # scheduler / background work
+    # The brand the person has switched to. While set, they see only that brand's data and only the
+    # permissions their roles give them on it. None = every brand they can see (admins, brand-wide roles).
+    active_brand: int | None = None
 
     def can(self, perm: str, brand_id: int | None = None, destination_id: int | None = None) -> bool:
         if self.system or self.platform_admin:
@@ -76,28 +83,40 @@ class User:
         if perm in PLATFORM_PERMS:
             return False
         for b in self.bindings:
-            if perm not in BRAND_PERMS.get(b.role, set()):
+            if perm not in b.perms:
                 continue
+            if self.active_brand is not None and b.brand_id not in (None, self.active_brand):
+                continue  # a role on another brand doesn't count while working in this one
             if b.brand_id is not None and brand_id is not None and b.brand_id != brand_id:
                 continue
             if b.brand_id is not None and brand_id is None and perm != "view":
                 continue  # shared (brand-less) objects can only be changed by platform admins
-            if perm == "syncs.run" and b.role == "operator" and b.destination_ids and destination_id not in b.destination_ids:
+            if perm == "syncs.run" and b.destination_ids and destination_id not in b.destination_ids:
                 continue
             return True
         return False
 
-    def brands(self, perm: str = "view") -> set[int] | None:
-        """Brand IDs where the user has `perm`; None means every brand."""
+    def _brands(self, perm: str) -> set[int] | None:
         if self.system or self.platform_admin:
             return None
         out: set[int] = set()
         for b in self.bindings:
-            if perm in BRAND_PERMS.get(b.role, set()):
+            if perm in b.perms:
                 if b.brand_id is None:
                     return None
                 out.add(b.brand_id)
         return out
+
+    def brands(self, perm: str = "view") -> set[int] | None:
+        """Brand IDs where the user has `perm` (within the active brand, if one is chosen); None means every brand."""
+        out = self._brands(perm)
+        if self.active_brand is None or self.system:
+            return out
+        return {self.active_brand} if out is None or self.active_brand in out else set()
+
+    def all_brands(self, perm: str = "view") -> set[int] | None:
+        """Like brands(), ignoring the active brand: everything they could switch to."""
+        return self._brands(perm)
 
     def sees(self, brand_id: int | None) -> bool:
         allowed = self.brands("view")
@@ -105,6 +124,7 @@ class User:
 
 
 SYSTEM = User(email="system", name="Scheduler", system=True)
+ANON = User(email="anonymous", name="Anonymous")  # no roles: for the few endpoints that need no sign-in
 _user: ContextVar[User] = ContextVar("user", default=SYSTEM)
 
 
@@ -214,18 +234,62 @@ def _note_lookup(method: str, email: str, groups: list[str], error: str) -> None
     db.set_setting("group_lookup_requests", dict(list(seen.items())[-20:]))
 
 
-def load_user(email: str, name: str = "", groups: list[str] | None = None, user_token: str | None = None) -> User:
+def custom_roles() -> dict[str, dict]:
+    """Roles an admin defined, by key."""
+    return {r["key"]: r for r in db.query("SELECT * FROM custom_roles ORDER BY label")}
+
+
+def role_perms(role: str, custom: dict[str, dict] | None = None) -> set[str]:
+    if role in BRAND_PERMS:
+        return set(BRAND_PERMS[role])
+    c = (custom if custom is not None else custom_roles()).get(role)
+    return set(c["permissions"]) & ALL_BRAND_PERMS if c else set()
+
+
+def role_label(role: str, custom: dict[str, dict] | None = None) -> str:
+    if role in ROLES:
+        return ROLES[role]["label"]
+    c = (custom if custom is not None else custom_roles()).get(role)
+    return c["label"] if c else role
+
+
+def role_exists(role: str) -> bool:
+    return role in ROLES or bool(db.one("SELECT id FROM custom_roles WHERE key = ?", (role,)))
+
+
+def all_roles() -> list[dict]:
+    """Built-in roles, then custom ones, each with the permissions it grants."""
+    out = [{"role": k, **v, "custom": False,
+            "permissions": sorted(BRAND_PERMS.get(k, ALL_BRAND_PERMS | PLATFORM_PERMS))} for k, v in ROLES.items()]
+    out += [{"role": r["key"], "label": r["label"], "description": r["description"], "custom": True,
+             "permissions": sorted(set(r["permissions"]) & ALL_BRAND_PERMS), "created_by": r["created_by"],
+             "created_at": r["created_at"]} for r in custom_roles().values()]
+    return out
+
+
+def load_user(email: str, name: str = "", groups: list[str] | None = None, user_token: str | None = None,
+              is_admin: bool = False) -> User:
     email = email.strip().lower()
     groups = groups if groups is not None else _groups_for(email, user_token)
     low_groups = {g.lower() for g in groups}
     rows = db.query("SELECT * FROM role_bindings")
-    bindings = [Binding(r["role"], r["brand_id"], [int(x) for x in r["destination_ids"] or []]) for r in rows
+    custom = custom_roles()
+    bindings = [Binding(r["role"], r["brand_id"], [int(x) for x in r["destination_ids"] or []],
+                        perms=role_perms(r["role"], custom), label=role_label(r["role"], custom)) for r in rows
                 if (r["principal_type"] == "user" and r["principal"].lower() == email)
                 or (r["principal_type"] == "group" and r["principal"].lower() in low_groups)]
     admins = _platform_admin_names()
-    platform = (email in admins or bool(low_groups & admins) or any(b.role == "platform_admin" for b in bindings))
+    platform = (is_admin or email in admins or bool(low_groups & admins) or any(b.role == "platform_admin" for b in bindings))
     return User(email=email, name=name or email.split("@")[0], groups=groups,
                 bindings=[b for b in bindings if b.role != "platform_admin"], platform_admin=platform)
+
+
+PUBLIC_PATHS = {"/api/auth/config", "/api/auth/login"}
+
+
+def bearer(headers) -> str:
+    h = headers.get("authorization") or ""
+    return h[7:].strip() if h.lower().startswith("bearer ") else ""
 
 
 def _resolve(headers) -> User:
@@ -237,20 +301,61 @@ def _resolve(headers) -> User:
             raise HTTPException(401, "Sign in through Databricks to use this app")
         return load_user(email, headers.get("x-forwarded-preferred-username") or "",
                          user_token=headers.get("x-forwarded-access-token"))
+    if auth.local_enabled():
+        row = auth.user_for_token(bearer(headers))
+        if not row:
+            raise HTTPException(401, "Sign in to continue")
+        return load_user(row["email"], row["name"], groups=[], is_admin=bool(row["is_admin"]))
     persona = headers.get("x-dev-user")
     if persona:
         return load_user(persona, groups=[])
     dev = os.environ.get("CDP_DEV_USER", "you@local.dev")
     u = load_user(dev, groups=[])
-    u.platform_admin = True  # local development without a persona: full access
+    u.platform_admin = True  # local development without sign-in or persona: full access
     return u
 
 
 async def bind_user(request: Request) -> None:
     """App-wide dependency: resolve the caller once per request and expose it via current()."""
-    if not request.url.path.startswith("/api/"):
+    path = request.url.path
+    if not path.startswith("/api/"):
         return
-    _user.set(await run_in_threadpool(_resolve, request.headers))
+    if path in PUBLIC_PATHS or (auth.local_enabled() and path == "/api/inbox" and request.method == "POST"):
+        _user.set(ANON)  # sign-in itself, and the demo webhook receiver that syncs post to
+        return
+    _user.set(await run_in_threadpool(_resolve_scoped, request.headers))
+
+
+def switchable_brands(u: User) -> list[dict]:
+    """Brands the person can switch to (ignoring the one they're in now), by name."""
+    allowed = u.all_brands()
+    return [b for b in db.query("SELECT id, name FROM brands ORDER BY lower(name)") if allowed is None or b["id"] in allowed]
+
+
+def sees_every_brand(u: User) -> bool:
+    return u.all_brands() is None
+
+
+def scope_to_brand(u: User, raw: str | None) -> None:
+    """Apply the brand chosen in the app's brand switcher (X-Active-Brand: a brand id, or "all").
+    A choice they may not make is ignored. Without a valid choice: people who see every brand (admins,
+    brand-wide roles) work across all brands; everyone else lands in their first brand, so what they can
+    do is always that brand's permissions."""
+    raw = (raw or "").strip().lower()
+    options = switchable_brands(u)
+    ids = [b["id"] for b in options]
+    if raw == "all" and sees_every_brand(u):
+        u.active_brand = None
+    elif raw.isdigit() and int(raw) in ids:
+        u.active_brand = int(raw)
+    else:
+        u.active_brand = None if sees_every_brand(u) else (ids[0] if ids else None)
+
+
+def _resolve_scoped(headers) -> User:
+    u = _resolve(headers)
+    scope_to_brand(u, headers.get("x-active-brand"))
+    return u
 
 
 def require(perm: str, brand_id: int | None = None, destination_id: int | None = None) -> User:

@@ -1,6 +1,7 @@
 import { StrictMode, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BrowserRouter, Link, Route, Routes, useLocation } from 'react-router-dom'
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { SHOW_PRIORITY_LISTS, SHOW_PROFILES } from './features'
 import './styles.css'
 import './cdp.css'
 import './kit.css'
@@ -22,10 +23,13 @@ import Governance from './pages/Governance'
 import ThemeSwitch from './components/ThemeSwitch'
 import { ConfirmHost, QuickFind, ToastHost } from './components/kit'
 import Access from './pages/Access'
+import Account from './pages/Account'
 import Alerts from './pages/Alerts'
-import { MeProvider, setPersona, useMe } from './components/me'
-import { api, getPersona } from './api'
-import { useAsync } from './components/ui'
+import { AuthGate } from './components/auth'
+import UserMenu from './components/UserMenu'
+import BrandSwitcher from './components/BrandSwitcher'
+import { MeProvider, useMe } from './components/me'
+import { api } from './api'
 
 const Icon = ({ d }: { d: string }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>
@@ -52,11 +56,11 @@ const TOP: Item[] = [
 ]
 const SECTIONS: { n: number; label: string; items: Item[] }[] = [
   { n: 1, label: 'Schema', items: [{ to: '/schema', label: 'Data model', icon: I.schema, match: (p) => p === '/schema' || p === '/setup' }] },
-  { n: 2, label: 'Modeling', items: [{ to: '/traits', label: 'Traits', icon: I.traits }, { to: '/profiles', label: 'Profiles', icon: I.profiles }] },
+  { n: 2, label: 'Modeling', items: [{ to: '/traits', label: 'Traits', icon: I.traits }, ...(SHOW_PROFILES ? [{ to: '/profiles', label: 'Profiles', icon: I.profiles }] : [])] },
   {
     n: 3, label: 'Segmentation', items: [
       { to: '/audiences', label: 'Audiences', icon: I.audiences },
-      { to: '/governance?tab=priority', label: 'Priority lists', icon: I.priority, match: (p, s) => p === '/governance' && s.get('tab') === 'priority' },
+      ...(SHOW_PRIORITY_LISTS ? [{ to: '/governance?tab=priority', label: 'Priority lists', icon: I.priority, match: (p: string, s: URLSearchParams) => p === '/governance' && s.get('tab') === 'priority' }] : []),
     ],
   },
   {
@@ -70,38 +74,6 @@ const SECTIONS: { n: number; label: string; items: Item[] }[] = [
 ]
 const ADMIN: Item[] = [{ to: '/access', label: 'Access', icon: I.access }]
 const ALL = [...TOP, ...SECTIONS.flatMap((s) => s.items)]
-
-function initials(name: string) {
-  return name.split(/[\s._@-]+/).filter(Boolean).slice(0, 2).map((p) => p[0]!.toUpperCase()).join('') || '?'
-}
-
-/** Who is signed in, their role, and (local development only) a persona picker. */
-function UserChip() {
-  const { me, roleLabel } = useMe()
-  const personas = useAsync(() => (me && !me.in_databricks_app ? api.get<string[]>('/dev/personas') : Promise.resolve([] as string[])), [me?.in_databricks_app])
-  if (!me) return null
-  const persona = getPersona()
-  return (
-    <div className="user-chip">
-      <div className="row" style={{ gap: 10 }}>
-        <span className="user-avatar" aria-hidden="true">{initials(me.name || me.email)}</span>
-        <div className="user-meta">
-          <strong title={me.email}>{me.name || me.email}</strong>
-          <small>{roleLabel}</small>
-        </div>
-      </div>
-      {!me.in_databricks_app && (
-        <label className="persona">
-          <span>Preview as</span>
-          <select value={persona} onChange={(e) => setPersona(e.target.value)}>
-            <option value="">Me (Platform Admin)</option>
-            {(personas.data ?? []).map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
-        </label>
-      )}
-    </div>
-  )
-}
 
 function useActive() {
   const loc = useLocation()
@@ -172,21 +144,17 @@ function Layout() {
             </div>
           )}
         </nav>
-        <UserChip />
-        <div className="sidebar-theme"><span>Theme</span><ThemeSwitch /></div>
-        <div className="sidebar-foot">
-          <span className="status-dot" aria-hidden="true" />
-          <div>Databricks<small>Connected · no data copied</small></div>
-        </div>
+        <BrandSwitcher />
       </aside>
       <main className="main">
+        <div className="main-strip"><UserMenu /></div>
         <Routes>
           <Route path="/" element={<Overview />} />
           <Route path="/sources" element={<Sources />} />
           <Route path="/schema" element={<Setup />} />
           <Route path="/setup" element={<Setup />} />
           <Route path="/traits" element={<Traits />} />
-          <Route path="/profiles" element={<Profiles />} />
+          <Route path="/profiles" element={SHOW_PROFILES ? <Profiles /> : <Navigate to="/" replace />} />
           <Route path="/audiences" element={<Audiences />} />
           <Route path="/audiences/:id" element={<AudienceBuilder />} />
           <Route path="/governance" element={<Governance />} />
@@ -196,6 +164,7 @@ function Layout() {
           <Route path="/activations/:id" element={<ActivationDetail />} />
           <Route path="/inbox" element={<Inbox />} />
           <Route path="/access" element={<Access />} />
+          <Route path="/account" element={<Account />} />
           <Route path="/alerts" element={<Alerts />} />
         </Routes>
       </main>
@@ -208,6 +177,6 @@ function Layout() {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <MeProvider><BrowserRouter><Layout /></BrowserRouter></MeProvider>
+    <AuthGate><MeProvider><BrowserRouter><Layout /></BrowserRouter></MeProvider></AuthGate>
   </StrictMode>,
 )

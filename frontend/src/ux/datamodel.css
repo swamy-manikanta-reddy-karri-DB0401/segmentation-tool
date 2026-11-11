@@ -135,3 +135,7 @@
 .dx-table table { min-width: 760px; }
 .dx-table td, .dx-table th { white-space: nowrap; }
 .dx-table td:first-child { max-width: 320px; }
+
+/* nothing selected yet: the diagram uses the full width; the details panel appears on click */
+.dx-layout.solo { grid-template-columns: minmax(0, 1fr); }
+.dx-ins-close { flex: none; }
