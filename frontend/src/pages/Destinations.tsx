@@ -129,7 +129,7 @@ function Catalog({ types, onChoose, onClose }: { types: DestinationType[]; onCho
           <button key={t.type} className={`dst-type ${t.type === 'sailthru' ? 'featured' : ''}`} onClick={() => onChoose(t)}>
             <DestIcon type={t.type} size={44} />
             <span className="wz-opt-main">
-              <strong>{t.label}{t.type === 'sailthru' && <span className="badge brand">Recommended</span>}{t.beta && <span className="badge amber">Beta</span>}</strong>
+              <strong>{t.label}{t.beta && <span className="badge amber">Beta</span>}</strong>
               <small>{t.description}</small>
               <span className="dst-tags">{t.sync_types.slice(0, 4).map((st) => <span key={st.name} className="badge">{st.label}</span>)}</span>
             </span>
