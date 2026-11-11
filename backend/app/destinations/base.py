@@ -19,13 +19,15 @@ from dataclasses import asdict, dataclass, field
 class ConfigField:
     name: str
     label: str
-    type: str = "text"  # text | password | number | textarea | select | column
+    type: str = "text"  # text | password | number | textarea | select | column | toggle ("true" or "")
     required: bool = True
     help: str = ""
     default: str | int | None = None
     options: list[dict] = field(default_factory=list)  # for select: [{"value", "label"}]
     modes: list[str] = field(default_factory=list)  # only shown for these modes (empty = all)
     secret: bool = False  # masked like a password when read back (e.g. a pasted JSON key)
+    advanced: bool = False  # shown under "Advanced"
+    show_if: dict = field(default_factory=dict)  # only shown when other fields have these values, e.g. {"segment": "existing"}
 
 
 @dataclass
@@ -63,9 +65,10 @@ class SyncType:
     options: list[ConfigField] = field(default_factory=list)
     source: str = "audience"  # "audience" (one row per member) or "events" (rows of an event/related model)
     default_delete: str = "do_nothing"  # used when a sync doesn't choose one
+    resend_all_modes: list[str] = field(default_factory=list)  # modes that send the whole audience on every run
 
 
-MODE_LABELS = {"upsert": "Upsert", "update": "Update", "insert": "Insert", "add": "Add"}
+MODE_LABELS = {"upsert": "Upsert", "update": "Update", "insert": "Insert", "add": "Add", "all": "All"}
 
 
 class Destination:
@@ -154,6 +157,9 @@ class Destination:
     def clear(self, rows: list[dict]) -> dict[str, str]:
         """Delete behavior 'clear': blank the mapped fields, keep the record."""
         raise NotImplementedError
+
+    def finish(self) -> None:
+        """Runs after every batch was sent successfully (e.g. write a file even when nothing changed)."""
 
     def close(self) -> None:
         pass

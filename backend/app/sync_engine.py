@@ -19,6 +19,7 @@ import json
 import re
 import threading
 import traceback
+from datetime import datetime, timedelta, timezone
 from typing import Iterator
 
 import logging
@@ -120,7 +121,9 @@ def validate_config(cfg: dict, dest_cls, schema: dict) -> dict:
     if not mapping_ and not st.identifiers:
         raise SyncError("Map at least one field")
     for opt in st.options:
-        if opt.required and not cfg["options"].get(opt.name) and (not opt.modes or cfg["mode"] in opt.modes):
+        shown = (not opt.modes or cfg["mode"] in opt.modes) and all(
+            str(cfg["options"].get(k, "")) == v for k, v in opt.show_if.items())
+        if opt.required and not cfg["options"].get(opt.name) and shown:
             raise SyncError(f"{opt.label} is required")
         if opt.type == "column" and cfg["options"].get(opt.name) and cfg["options"][opt.name] not in sources:
             raise SyncError(f"{opt.label}: unknown column")
@@ -285,6 +288,17 @@ def _run_guarded(sync_id: int, run_id: int, full_resync: bool) -> None:
             log.exception("Alert evaluation failed for sync %s run %s", sync_id, run_id)
 
 
+def full_resync_due(options: dict) -> bool:
+    """Sync option `full_resync_days`: re-deliver the whole audience every N days (not just the changes)."""
+    days = options.get("full_resync_days")
+    if days in (None, ""):
+        return False
+    last = options.get("last_full_resync")
+    if not last:
+        return True
+    return datetime.fromisoformat(last) <= datetime.now(timezone.utc) - timedelta(days=float(days))
+
+
 def execute(sync_id: int, run_id: int, full_resync: bool = False) -> None:
     sync = db.one("SELECT * FROM syncs WHERE id = ?", (sync_id,))
     audience = db.one("SELECT * FROM audiences WHERE id = ?", (sync["audience_id"],))
@@ -302,6 +316,10 @@ def execute(sync_id: int, run_id: int, full_resync: bool = False) -> None:
                "mapped_targets": [m.get("target") for m in cfg.get("mapping") or []]}
     dest = dest_cls(dest_row["config"], context)
     created = dest.prepare()
+    if not full_resync and (cfg["mode"] in st.resend_all_modes or full_resync_due(cfg["options"])):
+        full_resync = True
+    if full_resync and cfg["options"].get("full_resync_days") not in (None, ""):
+        created = {**created, "last_full_resync": datetime.now(timezone.utc).isoformat()}
     if created:  # e.g. an ad-platform segment made on the first run: remember it for later runs
         cfg["options"].update(created)
         db.update("syncs", sync_id, {"config": {**sync["config"], "options": {**(sync["config"].get("options") or {}), **created}}})
@@ -361,6 +379,7 @@ def execute(sync_id: int, run_id: int, full_resync: bool = False) -> None:
                 for pk, err in result.items():
                     reject(pk, kind, err)
                 db.update("sync_runs", run_id, {**counts, "failed": len(failed)})
+        dest.finish()
     finally:
         dest.close()
 

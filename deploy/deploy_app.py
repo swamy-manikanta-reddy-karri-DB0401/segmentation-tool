@@ -41,6 +41,7 @@ python-liquid>=1.12
 pyjwt[crypto]>=2.8
 psycopg[binary,pool]>=3.2
 databricks-sdk>=0.81.0
+boto3>=1.34
 """
 
 

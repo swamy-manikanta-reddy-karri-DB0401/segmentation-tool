@@ -245,3 +245,11 @@ a.act-chip:hover { border-color: var(--brand-fill); color: var(--brand); }
 .kv-denied { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; font-size: 12.5px;
   background: color-mix(in srgb, var(--amber) 12%, transparent); border: 1px solid color-mix(in srgb, var(--amber) 35%, transparent); }
 .kv-denied .btn { margin-left: auto; }
+
+/* "Advanced" settings tucked under a disclosure (destination form and sync options) */
+.dx2-advanced { border-top: 1px solid var(--border); padding-top: 12px; }
+.dx2-advanced-body { display: flex; flex-direction: column; gap: 18px; padding-top: 16px; }
+.dx2-advanced > summary { cursor: pointer; font-weight: 600; color: var(--text-2); list-style: none; display: flex; align-items: center; gap: 6px; width: fit-content; }
+.dx2-advanced > summary::-webkit-details-marker { display: none; }
+.dx2-advanced > summary::before { content: '›'; display: inline-block; transition: transform .15s; font-size: 16px; line-height: 1; }
+.dx2-advanced[open] > summary::before { transform: rotate(90deg); }

@@ -15,15 +15,16 @@ SA = json.dumps({"type": "service_account", "client_email": "uploader@proj.iam.g
 
 
 def row(i, ident, list_id=None):
-    f = {"identifier": ident}
+    f = {"ppid": ident}
     if list_id:
         f["list_id"] = list_id
     return {"id": str(i), "match": None, "fields": f}
 
 
 def dest(handler, **options):
-    d = GoogleAdManager({"service_account_json": SA, "bucket": "gs://gam-bucket/", "network_code": "1234", "folder": "mm"},
-                        {"sync_id": 7, "run_id": 3, "options": {"identifier_type": "ppid", "list_id": "555", **options}})
+    d = GoogleAdManager({"service_account_json": SA, "project_id": "proj", "bucket": "gs://gam-bucket/", "network_code": "1234"},
+                        {"sync_id": 7, "run_id": 3, "mode": "insert", "mapped_targets": ["ppid"],
+                         "options": {"list_id": "555", "filename": "mm/sync-{sync.id}/run{sync.run.id}.csv", **options}})
     d.http = httpx.Client(transport=httpx.MockTransport(handler))
     return d
 
@@ -36,8 +37,10 @@ def test_file_format_matches_ad_manager_spec():
 
 
 def test_removals_use_delete_flag_and_bad_rows_are_rejected():
-    d = dest(lambda r: httpx.Response(200), identifier_type="cookie_adid")
-    body, errors, n = d.build_file([row(1, "x1"), row(2, ""), row(3, "a,b")], delete=True)
+    d = dest(lambda r: httpx.Response(200))
+    d.context["mapped_targets"] = ["cookie_adid"]
+    rows = [{"id": str(i), "match": None, "fields": {"cookie_adid": v}} for i, v in ((1, "x1"), (2, ""), (3, "a,b"))]
+    body, errors, n = d.build_file(rows, delete=True)
     assert body.splitlines() == ["cookie_adid,list_id,delete,process_consent", "x1,555,1,"]
     assert set(errors) == {"2", "3"} and n == 1
 
@@ -68,7 +71,7 @@ def test_upload_signs_in_with_service_account_and_writes_object():
     assert up.url.path == "/upload/storage/v1/b/gam-bucket/o"
     assert up.headers["authorization"] == "Bearer tok"
     name = up.url.params["name"]
-    assert name.startswith("mm/sync-7/net1234-run3-") and name.endswith("-add-1.csv") and "___" not in name
+    assert name == "mm/sync-7/run3.csv"
     assert up.content.decode().startswith("ppid,list_id,delete,process_consent\n")
 
 
@@ -126,14 +129,61 @@ def test_membership_days_range(days):
         dest(lambda r: httpx.Response(200)).create_segment("Fans", days)
 
 
-def test_prepare_creates_segment_only_when_none_is_set():
+def test_prepare_creates_segment_only_when_auto_create_is_on():
     seen = {}
-    d = dest(segment_handler(seen), list_id="")
-    d.context["audience_name"] = "Engaged fans"
-    assert d.prepare() == {"list_id": "98765"}
-    assert json.loads(seen["req"].content)["displayName"] == "Engaged fans"
-    assert d.options["list_id"] == "98765"
-    assert dest(lambda r: httpx.Response(500)).prepare() == {}  # list_id 555 already set: no API call
+    d = dest(segment_handler(seen), list_id="", auto_create="true", segment_name="Engaged fans", membership_days=30)
+    created = d.prepare()
+    assert created["list_id"] == "98765" and "segment_created_at" in created
+    body = json.loads(seen["req"].content)
+    assert body["displayName"] == "Engaged fans" and body["nonRuleBasedFirstPartyAudienceSegment"] == {"membershipExpirationDays": "30"}
+    assert dest(lambda r: httpx.Response(500), auto_create="true").prepare() == {}  # list_id 555 already set: no API call
+
+
+def test_list_id_required_when_auto_create_is_off():
+    with pytest.raises(ValueError, match="List ID is required"):
+        dest(lambda r: httpx.Response(500), list_id="").prepare()
     mapped = dest(lambda r: httpx.Response(500), list_id="")
-    mapped.context["mapped_targets"] = ["identifier", "list_id"]
+    mapped.context["mapped_targets"] = ["ppid", "list_id"]
     assert mapped.prepare() == {}
+
+
+def test_only_one_identifier_type_may_be_mapped():
+    d = dest(lambda r: httpx.Response(500))
+    d.context["mapped_targets"] = ["ppid", "cookie_adid"]
+    with pytest.raises(ValueError, match="one identifier type"):
+        d.prepare()
+
+
+def test_uploads_wait_25_hours_after_segment_creation():
+    from datetime import datetime, timedelta, timezone
+    recent = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    d = dest(lambda r: httpx.Response(500), segment_created_at=recent)
+    errors = d.upsert([row(1, "abc")])
+    assert "Segment created recently" in errors["1"]
+    old = (datetime.now(timezone.utc) - timedelta(hours=26)).isoformat()
+    assert dest(lambda r: httpx.Response(500), segment_created_at=old)._waiting_for_segment() is None
+
+
+def test_filename_template_variables_and_offset():
+    d = dest(lambda r: httpx.Response(200), filename="/up/{YYYY}-{MM}-{DD}-{model.id}-{sync.id}-{sync.run.id}", filename_offset="-86400")
+    d.context["model_id"] = 42
+    from datetime import datetime, timedelta, timezone
+    y = datetime.now(timezone.utc) - timedelta(days=1)
+    assert d.filename() == f"up/{y:%Y-%m-%d}-42-7-3.csv"
+    d._files = 1
+    assert d.filename("remove") == f"up/{y:%Y-%m-%d}-42-7-3-remove-2.csv"
+
+
+def test_empty_run_writes_header_only_file_unless_skipped():
+    names = []
+
+    def handler(req):
+        if req.url.host == "oauth2.googleapis.com":
+            return httpx.Response(200, json={"access_token": "tok"})
+        names.append((req.url.params["name"], req.content.decode()))
+        return httpx.Response(200)
+    dest(handler).finish()
+    assert names == [("mm/sync-7/run3.csv", "ppid,list_id,delete,process_consent\n")]
+    names.clear()
+    dest(handler, skip_empty="true").finish()
+    assert names == []

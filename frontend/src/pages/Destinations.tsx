@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { api } from '../api'
-import type { Destination, DestinationType, Sync } from '../api'
+import type { ConfigField, Destination, DestinationType, Sync } from '../api'
 import { Link } from 'react-router-dom'
-import { DestIcon, ErrorBox, Field, Modal, PageHead, useAsync } from '../components/ui'
+import { DestIcon, ErrorBox, Field, Modal, PageHead, Toggle, useAsync } from '../components/ui'
 import { useMe } from '../components/me'
 import { askConfirm, FilterChips, matches, NoResults, SearchBox, SkeletonRows, toast, Toolbar, useUrlState } from '../components/kit'
 import { CollectionLayout, Facts, Inspector, ListPane, ListRow, Section, StatTile } from '../components/collection'
@@ -66,7 +66,20 @@ function DestinationModal({ types, existing, onClose, onSaved }: {
           </select>
         </Field>
       )}
-      {type.config_fields.map((f) => (
+      {type.config_fields.filter((f) => !f.advanced).map(renderField)}
+      {type.config_fields.some((f) => f.advanced) && (
+        <details className="dx2-advanced" open={type.config_fields.some((f) => f.advanced && (f.required || config[f.name]))}>
+          <summary>Advanced</summary>
+          <div className="dx2-advanced-body">{type.config_fields.filter((f) => f.advanced).map(renderField)}</div>
+        </details>
+      )}
+      {test && <div className={`alert ${test.ok ? 'success' : 'error'}`}>{test.message}</div>}
+      <ErrorBox error={error} />
+    </Modal>
+  )
+
+  function renderField(f: ConfigField) {
+    return (
         <Field key={f.name} label={`${f.label}${f.required ? '' : ' (optional)'}`} help={f.help}>
           {f.type === 'textarea' && f.secret && config[f.name] === MASK ? (
             <div className="secret-saved">
@@ -78,6 +91,9 @@ function DestinationModal({ types, existing, onClose, onSaved }: {
             <textarea className={`input ${f.secret ? 'mono' : ''}`} rows={f.secret ? 6 : 3} value={config[f.name] ?? ''}
               placeholder={f.secret ? '{ "type": "service_account", "client_email": "…", "private_key": "…" }' : undefined}
               spellCheck={false} onChange={(e) => setConfig({ ...config, [f.name]: e.target.value })} />
+          ) : f.type === 'toggle' ? (
+            <div><Toggle value={config[f.name] === 'true' ? 'true' : ''} options={[{ value: '', label: 'Off' }, { value: 'true', label: 'On' }]}
+              onChange={(v) => setConfig({ ...config, [f.name]: v })} /></div>
           ) : f.type === 'select' && f.options.length ? (
             <select className="input" value={config[f.name] ?? String(f.default ?? '')} onChange={(e) => setConfig({ ...config, [f.name]: e.target.value })}>
               {!f.required && <option value="">—</option>}
@@ -87,15 +103,12 @@ function DestinationModal({ types, existing, onClose, onSaved }: {
             <input className="input" type={f.type === 'password' ? 'password' : f.type === 'number' ? 'number' : 'text'}
               value={config[f.name] ?? ''} onChange={(e) => setConfig({ ...config, [f.name]: e.target.value })} />
           )}
-          {type.type === 'webhook' && f.name === 'url' && (
+          {type?.type === 'webhook' && f.name === 'url' && (
             <button className="btn ghost sm" style={{ alignSelf: 'flex-start' }} onClick={() => setConfig({ ...config, url: INBOX_URL })}>Use built-in Test Inbox</button>
           )}
         </Field>
-      ))}
-      {test && <div className={`alert ${test.ok ? 'success' : 'error'}`}>{test.message}</div>}
-      <ErrorBox error={error} />
-    </Modal>
-  )
+    )
+  }
 }
 
 /** Searchable catalog of destination types, grouped by category. */
@@ -351,7 +364,7 @@ export default function Destinations() {
             : <Inspector empty={<div><strong>No destination selected</strong></div>} />} />
       ) : (
         <div className="card dx2-empty">
-          <div className="dx2-empty-logos" aria-hidden="true">{['sailthru', 'brevo', 'gam', 'meta_custom_audience', 'hubspot'].map((t) => <DestIcon key={t} type={t} size={46} />)}</div>
+          <div className="dx2-empty-logos" aria-hidden="true">{['sailthru', 'brevo', 'gam', 'freewheel', 'meta_custom_audience', 'hubspot'].map((t) => <DestIcon key={t} type={t} size={46} />)}</div>
           <h2>Connect your first marketing tool</h2>
           <p className="muted">Sailthru, Google Ad Manager, Meta, HubSpot and more. You can add credentials now or later — syncs wait until they're in place.</p>
           {canAdd && <button className="btn primary" onClick={() => setModal({})} disabled={!types.data}>Add destination</button>}

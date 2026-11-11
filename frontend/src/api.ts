@@ -196,6 +196,8 @@ export interface ConfigField {
   options: { value: string; label: string }[]
   modes: string[]
   secret?: boolean
+  advanced?: boolean
+  show_if?: Record<string, string>
 }
 
 export interface TargetField { name: string; label: string; required: boolean }
@@ -212,6 +214,7 @@ export interface SyncTypeDef {
   options: ConfigField[]
   source: 'audience' | 'events'
   default_delete?: string
+  resend_all_modes?: string[]
 }
 
 export interface DestinationType {

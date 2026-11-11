@@ -15,6 +15,7 @@ const MODE_INFO: Record<string, string> = {
   upsert: 'Update existing records and insert new ones',
   update: 'Only update records that already exist in the destination',
   insert: 'Only send new rows — rows already sent are never updated',
+  all: 'Sends everyone who joined the audience since the last run',
 }
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, '')
 const SYNONYMS: Record<string, string[]> = {
@@ -44,9 +45,13 @@ function OptionInput({ field, value, columns, onChange }: { field: ConfigField; 
   if (field.type === 'select') {
     return (
       <select className="input" value={String(value ?? field.default ?? '')} onChange={(e) => onChange(e.target.value)}>
+        {!field.required && field.default == null && <option value="">—</option>}
         {field.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
     )
+  }
+  if (field.type === 'toggle') {
+    return <div><Toggle value={String(value ?? '') === 'true' ? 'true' : ''} options={[{ value: '', label: 'Off' }, { value: 'true', label: 'On' }]} onChange={onChange} /></div>
   }
   if (field.type === 'column') {
     return (
@@ -59,30 +64,6 @@ function OptionInput({ field, value, columns, onChange }: { field: ConfigField; 
   return (
     <input className="input" type={field.type === 'number' ? 'number' : 'text'} value={String(value ?? '')}
       placeholder={field.default != null ? String(field.default) : ''} onChange={(e) => onChange(e.target.value)} />
-  )
-}
-
-/** Google Ad Manager: create the audience segment from here instead of in Ad Manager. */
-function CreateSegment({ destId, defaultName, days, onCreated }: { destId: number; defaultName: string; days: unknown; onCreated: (id: string) => void }) {
-  const [name, setName] = useState(defaultName)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const create = async () => {
-    setBusy(true); setError(null)
-    try {
-      const seg = await api.post<{ id: string; name: string }>(`/destinations/${destId}/segments`, { name, membership_days: days || undefined })
-      onCreated(seg.id)
-    } catch (e) { setError((e as Error).message) } finally { setBusy(false) }
-  }
-  return (
-    <div className="create-seg">
-      <div className="small muted">No segment yet? Create one in Ad Manager now (or leave the ID empty and it's created on the first run).</div>
-      <div className="row">
-        <input className="input grow" value={name} placeholder="Segment name" onChange={(e) => setName(e.target.value)} />
-        <button className="btn" onClick={create} disabled={busy || !name.trim()}>{busy ? 'Creating…' : 'Create in Ad Manager'}</button>
-      </div>
-      <ErrorBox error={error} />
-    </div>
   )
 }
 
@@ -296,7 +277,8 @@ export default function ActivationNew() {
 
   const identifiers = st?.identifiers.filter((i) => !i.modes.length || i.modes.includes(cfg.mode)) ?? []
   const requiredMissing = (st?.target_fields ?? []).filter((t) => t.required && !cfg.mapping.some((m) => m.target === t.name && m.source))
-  const visibleOptions = st?.options.filter((o) => !o.modes.length || o.modes.includes(cfg.mode)) ?? []
+  const visibleOptions = st?.options.filter((o) => (!o.modes.length || o.modes.includes(cfg.mode))
+    && Object.entries(o.show_if ?? {}).every(([k, v]) => String(cfg.options[k] ?? st.options.find((x) => x.name === k)?.default ?? '') === v)) ?? []
   const requiredOptions = visibleOptions.filter((o) => o.required && !cfg.options[o.name])
   const STEPS = ['Audience & destination', 'What to send', 'Name & schedule']
   const STEP_HINTS = ['Who, and to which tool', 'Matching and fields', 'When it runs']
@@ -309,6 +291,12 @@ export default function ActivationNew() {
   ].filter(Boolean) as string[]
   const canReach = (n: number) => n === 1 ? !editId : n === 2 ? !step1Problems.length : !step1Problems.length && !step2Problems.length
   const go = (n: number) => { if (n === 2 && step === 1) goToConfigure(); else setStep(n) }
+  const modeInfo = (m: string) => st?.resend_all_modes?.includes(m) ? 'Every run sends everyone currently in the audience' : MODE_INFO[m]
+  const renderOption = (o: ConfigField) => (
+    <Field key={o.name} label={`${o.label}${o.required ? '' : ' (optional)'}`} help={o.help}>
+      <OptionInput field={o} value={cfg.options[o.name]} columns={columns} onChange={(v) => set({ options: { ...cfg.options, [o.name]: v } })} />
+    </Field>
+  )
 
   return (
     <div className="page wide">
@@ -374,14 +362,14 @@ export default function ActivationNew() {
                   </Field>
                 )}
                 {st.modes.length > 1 ? (
-                  <Field label="Sync mode" help={MODE_INFO[cfg.mode]}>
+                  <Field label="Sync mode" help={modeInfo(cfg.mode)}>
                     <Toggle value={cfg.mode} options={st.modes.map((m) => ({ value: m, label: m[0].toUpperCase() + m.slice(1) }))}
                       onChange={(m) => {
                         const ok = st.identifiers.find((i) => i.name === cfg.match?.field && (!i.modes.length || i.modes.includes(m)))
                         set({ mode: m, match: ok ? cfg.match : { field: st.identifiers.find((i) => !i.modes.length || i.modes.includes(m))?.name ?? '', source: cfg.match?.source ?? '' } })
                       }} />
                   </Field>
-                ) : <div className="small muted">Sync mode: <strong>{st.modes[0][0].toUpperCase() + st.modes[0].slice(1)}</strong> — {MODE_INFO[st.modes[0]] ?? 'Adds and removes people'}</div>}
+                ) : <div className="small muted">Sync mode: <strong>{st.modes[0][0].toUpperCase() + st.modes[0].slice(1)}</strong> — {modeInfo(st.modes[0]) ?? 'Adds and removes people'}</div>}
 
                 {identifiers.length > 0 && (
                   <Field label="Record matching" help={`How rows are matched to records in ${dest?.name}. Pick a column that is unique and never empty.`}>
@@ -399,15 +387,13 @@ export default function ActivationNew() {
                   </Field>
                 )}
 
-                {visibleOptions.map((o) => (
-                  <Field key={o.name} label={`${o.label}${o.required ? '' : ' (optional)'}`} help={o.help}>
-                    <OptionInput field={o} value={cfg.options[o.name]} columns={columns} onChange={(v) => set({ options: { ...cfg.options, [o.name]: v } })} />
-                    {dest?.type === 'gam' && o.name === 'list_id' && !cfg.options.list_id && (
-                      <CreateSegment destId={dest.id} defaultName={audience?.name ?? ''} days={cfg.options.membership_days}
-                        onCreated={(id) => { set({ options: { ...cfg.options, list_id: id } }); toast(`Segment ${id} created in Ad Manager`) }} />
-                    )}
-                  </Field>
-                ))}
+                {visibleOptions.filter((o) => !o.advanced).map(renderOption)}
+                {visibleOptions.some((o) => o.advanced) && (
+                  <details className="dx2-advanced" open={visibleOptions.some((o) => o.advanced && cfg.options[o.name])}>
+                    <summary>Advanced</summary>
+                    <div className="dx2-advanced-body">{visibleOptions.filter((o) => o.advanced).map(renderOption)}</div>
+                  </details>
+                )}
               </div>
 
               <div className="card wz2-fields">
