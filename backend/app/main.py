@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import access, alerts, auth, targeting, audiences, catalog, config, connection, db, destinations, insights, routes_auth, scheduler, sync_engine
+from . import access, alerts, auth, audiences, catalog, config, connection, db, destinations, insights, routes_auth, scheduler, sync_engine
 from .compiler import CompileError, Compiler, source, trait_type
 from .databricks import DatabricksError, client, reset_client
 from .scheduler import ScheduleError
@@ -34,11 +34,27 @@ async def lifespan(_: FastAPI):
     access.seed()
     auth.seed()
     alerts.migrate_legacy()
+    retire_key_values()
     asyncio.get_running_loop().run_in_executor(None, access.check_group_lookup)  # self-test, result in settings
     scheduler.recover_interrupted_runs()
     task = asyncio.create_task(scheduler.loop())
     yield
     task.cancel()
+
+
+def retire_key_values() -> None:
+    """The Ad Manager key-value destination was removed: delete its leftover syncs and destinations."""
+    for d in db.query("SELECT id, name, brand_id FROM destinations WHERE type = 'gam_kv'"):
+        for s in db.query("SELECT id, name FROM syncs WHERE destination_id = ?", (d["id"],)):
+            db.delete("syncs", s["id"])
+            db.insert("audit_log", {"at": db.now(), "actor": "system", "action": "delete", "object_type": "sync",
+                                    "object_id": s["id"], "brand_id": d["brand_id"],
+                                    "details": {"name": s["name"], "reason": "key-value destination removed"}})
+        db.delete("destinations", d["id"])
+        db.insert("audit_log", {"at": db.now(), "actor": "system", "action": "delete", "object_type": "destination",
+                                "object_id": d["id"], "brand_id": d["brand_id"],
+                                "details": {"name": d["name"], "reason": "key-value destination removed"}})
+    db.execute("DROP TABLE IF EXISTS targeting_members")
 
 
 app = FastAPI(title="MediaMint CDP", lifespan=lifespan, dependencies=[Depends(access.bind_user)])
@@ -924,15 +940,6 @@ def update_sync(sync_id: int, body: dict = Body(...)):
     else:
         values = _validate_sync({**current, **body})
         values.update(_approval(brand_id))
-        old_value = ((current.get("config") or {}).get("options") or {}).get("value")
-        if (values["config"].get("options") or {}).get("value") != old_value and \
-                (_get("destinations", values["destination_id"])["type"] == "gam_kv"):
-            # the audience is published under a new name: drop the old members and resend everyone
-            targeting.clear_sync(sync_id)
-            try:
-                sync_engine.drop_state(sync_id)
-            except DatabricksError:
-                pass
         db.update("syncs", sync_id, values)
         access.audit("update", "sync", sync_id, brand_id, name=values["name"], approval=values["approval_status"])
     scheduler.refresh_next(sync_id)
@@ -949,7 +956,6 @@ def delete_sync(sync_id: int):
         sync_engine.drop_state(sync_id)
     except DatabricksError:
         pass  # best effort — app record is removed regardless
-    targeting.clear_sync(sync_id)  # key-value members stop being served
     db.delete("syncs", sync_id)
     access.audit("delete", "sync", sync_id, None, name=s["name"])
     return {"ok": True}
@@ -1202,49 +1208,6 @@ def put_email_settings(body: dict = Body(...)):
         raise ValueError("Set the From address")
     db.set_setting("smtp", s)
     return get_email_settings()
-
-
-# ---- on-site targeting (Ad Manager key-values) -------------------------------------------------
-
-def _require_targeting_client() -> None:
-    u = access.current()
-    if not (u.platform_admin or u.email in targeting.clients()):
-        db.set_setting("targeting_last_denied", {"identity": u.email, "at": db.now()})  # shown to admins so they can allow it
-        raise HTTPException(403, "This identity isn't allowed to look up visitors. A Platform Admin can add it under "
-                                 "Destinations → Ad Manager key-values → Website lookup.")
-
-
-@app.get("/api/targeting")
-def targeting_lookup(request: Request):
-    """Which audiences a visitor is in, as Ad Manager key-values. ?user_id=… (repeat for several, max 100)."""
-    _require_targeting_client()
-    ids = request.query_params.getlist("user_id")
-    if not ids:
-        raise ValueError("Pass at least one user_id")
-    found = targeting.lookup(ids)
-    body = {"user_id": ids[0], "targeting": found.get(ids[0], {})} if len(ids) == 1 else {"visitors": found}
-    return JSONResponse(body, headers={"Cache-Control": "private, max-age=60"})
-
-
-@app.post("/api/targeting/lookup")
-def targeting_lookup_batch(body: dict = Body(...)):
-    _require_targeting_client()
-    return {"visitors": targeting.lookup([str(x) for x in body.get("user_ids") or []])}
-
-
-@app.get("/api/targeting/summary")
-def targeting_summary():
-    access.require("destinations.manage")
-    return {"clients": targeting.clients(), "values": targeting.stats(), "last_denied": db.get_setting("targeting_last_denied"),
-            "lookup_url": f"{alerts.app_url() or ''}/api/targeting?user_id=VISITOR_ID"}
-
-
-@app.put("/api/targeting/clients")
-def put_targeting_clients(body: dict = Body(...)):
-    access.require("settings.manage")
-    out = targeting.set_clients(body.get("clients") or [])
-    access.audit("update", "targeting_clients", None, None, clients=out)
-    return {"clients": out}
 
 
 # ---- access control: me, brands, roles --------------------------------------------------------

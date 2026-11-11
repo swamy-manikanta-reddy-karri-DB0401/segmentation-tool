@@ -148,68 +148,6 @@ type Pol = { triggers: Record<string, TrigCfg> }
 const thresh = (key: string, t: TrigCfg) =>
   key === 'rejected' ? `≥ ${t.min_rows ?? 1} rejected` : key === 'throughput' ? `${t.days ?? 7} days` : key === 'audience' ? `< ${t.min_rows ?? 1} people` : key === 'duration' ? `> ${t.minutes ?? 60} min` : ''
 
-type TargetingSummary = {
-  clients: string[]; lookup_url: string; last_denied: { identity: string; at: string } | null
-  values: { key: string; audience: string; members: number; updated_at: string }[]
-}
-
-/** Key-value targeting: how the website asks "which audiences is this visitor in?" and passes it to Ad Manager. */
-function WebsiteSetup({ dkey }: { dkey: string }) {
-  const me = useMe()
-  const admin = me.canPlatform('settings.manage')
-  const summary = useAsync(() => api.get<TargetingSummary>('/targeting/summary'))
-  const [draft, setDraft] = useState('')
-  const s = summary.data
-  const values = (s?.values ?? []).filter((v) => v.key === dkey)
-  const lookup = s?.lookup_url || `${window.location.origin}/api/targeting?user_id=VISITOR_ID`
-  const saveClients = async (list: string[]) => {
-    try { await api.put('/targeting/clients', { clients: list }); summary.reload(); setDraft(''); toast('Allowed callers updated') }
-    catch (e) { toast((e as Error).message, 'error') }
-  }
-  const copy = (text: string) => navigator.clipboard?.writeText(text).then(() => toast('Copied'))
-  const snippet = `// 1) On your server: look the visitor up (service-principal OAuth token)
-const r = await fetch('${lookup.replace('VISITOR_ID', "' + visitorId + '")}', { headers: { Authorization: 'Bearer ' + token } })
-const { targeting } = await r.json()   // e.g. { "${dkey}": ["engaged_non_subs"] }
-
-// 2) In the page, before ads load: pass it to Ad Manager
-googletag.cmd.push(() => {
-  googletag.pubads().setTargeting('${dkey}', targeting['${dkey}'] || [])
-})`
-  return (
-    <Section title="Website setup" aside={<span className="small muted">key <code>{dkey}</code></span>}>
-      <ol className="kv-steps">
-        <li><strong>Your site's server looks up the visitor</strong> with their ID (the same ID you map in the sync).
-          <div className="kv-url"><code>{lookup}</code><button className="btn ghost sm" onClick={() => copy(lookup)}>Copy</button></div></li>
-        <li><strong>The page passes the result to Ad Manager</strong> as a key-value before ads load.
-          <div className="kv-code"><pre className="code">{snippet}</pre><button className="btn ghost sm" onClick={() => copy(snippet)}>Copy code</button></div></li>
-        <li><strong>Your ad team targets line items</strong> with <code>{dkey}</code> is <em>one of the values below</em> (Inventory → Key-values in Ad Manager).</li>
-      </ol>
-      <div className="kv-block">
-        <div className="kv-block-head"><strong>Audiences available as values</strong><span className="small muted">visitors per value</span></div>
-        {summary.loading ? <SkeletonRows rows={2} cols={3} /> : values.length ? values.map((v) => (
-          <div key={v.audience} className="kv-row"><code>{dkey}={v.audience}</code><span className="grow" /><strong>{v.members.toLocaleString()}</strong></div>
-        )) : <div className="small muted">Values appear after the first sync to this destination runs.</div>}
-      </div>
-      <div className="kv-block">
-        <div className="kv-block-head"><strong>Who may call the lookup</strong><span className="small muted">Databricks identities with CAN USE on this app</span></div>
-        {(s?.clients ?? []).map((c) => (
-          <div key={c} className="kv-row"><code>{c}</code><span className="grow" />{admin && <button className="btn ghost sm danger" onClick={() => saveClients((s?.clients ?? []).filter((x) => x !== c))}>Remove</button>}</div>
-        ))}
-        {!s?.clients?.length && <div className="small muted">Only Platform Admins so far. Add the service principal your website's server uses.</div>}
-        {admin && s?.last_denied && !(s.clients ?? []).includes(s.last_denied.identity.toLowerCase()) && (
-          <div className="kv-denied">Refused <code>{s.last_denied.identity}</code><button className="btn sm primary" onClick={() => saveClients([...(s?.clients ?? []), s!.last_denied!.identity])}>Allow it</button></div>
-        )}
-        {admin && (
-          <div className="row" style={{ marginTop: 6 }}>
-            <input className="input sm grow" value={draft} placeholder="Service principal application ID or email" onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && draft.trim() && saveClients([...(s?.clients ?? []), draft.trim()])} />
-            <button className="btn sm" disabled={!draft.trim()} onClick={() => saveClients([...(s?.clients ?? []), draft.trim()])}>Allow</button>
-          </div>
-        )}
-      </div>
-    </Section>
-  )
-}
 
 function DestinationInspector({ d, type, canManage, onEdit, onRemove }: {
   d: Destination; type?: DestinationType; canManage: boolean; onEdit: () => void; onRemove: () => void
@@ -273,7 +211,6 @@ function DestinationInspector({ d, type, canManage, onEdit, onRemove }: {
           </div>
         ) : <SkeletonRows rows={3} cols={2} />}
       </Section>
-      {d.type === 'gam_kv' && <WebsiteSetup dkey={String(d.config.key || 'mm_aud')} />}
       {settings.length > 0 && <Section title="Settings"><Facts rows={settings} /></Section>}
       {canManage && (
         <div className="sx-actions">

@@ -22,7 +22,6 @@ const GLYPH = {
 
 const MARKS: Record<string, Mark> = {
   gam: brand(siGoogle),
-  gam_kv: brand(siGoogle),
   google: brand(siGoogle),
   meta_custom_audience: brand(siMeta),
   meta: brand(siMeta),
@@ -39,7 +38,7 @@ const MARKS: Record<string, Mark> = {
 }
 
 export const LOGO_LABEL: Record<string, string> = {
-  gam: 'Google Ad Manager 360', gam_kv: 'Google Ad Manager (key-values)', meta_custom_audience: 'Meta', hubspot: 'HubSpot', brevo: 'Brevo', freewheel: 'FreeWheel Data Suite', pagerduty: 'PagerDuty', slack: 'Slack',
+  gam: 'Google Ad Manager 360', meta_custom_audience: 'Meta', hubspot: 'HubSpot', brevo: 'Brevo', freewheel: 'FreeWheel Data Suite', pagerduty: 'PagerDuty', slack: 'Slack',
   sailthru: 'Sailthru', email: 'Email', webhook: 'Webhook', csv: 'CSV', databricks: 'Databricks',
 }
 

@@ -216,15 +216,6 @@ CREATE TABLE IF NOT EXISTS alert_events (
     deliveries TEXT NOT NULL DEFAULT '[]',
     run_id INTEGER
 );
-CREATE TABLE IF NOT EXISTS targeting_members (
-    key TEXT NOT NULL,
-    audience_value TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    sync_id INTEGER,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY (key, audience_value, user_id)
-);
-CREATE INDEX IF NOT EXISTS targeting_members_user ON targeting_members (user_id);
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     at TEXT NOT NULL,
