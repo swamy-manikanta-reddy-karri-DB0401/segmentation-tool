@@ -511,6 +511,9 @@ function PropertyEditor({ node, model, onChange }: { node: PropertyNode; model: 
   const set = (patch: Partial<PropertyNode>) => onChange({ ...node, ...patch })
   const isTime = type === 'date' || type === 'timestamp'
   const canCompare = (type === 'number' || isTime) && ['equals', 'not_equals', 'gt', 'gte', 'lt', 'lte'].includes(op)
+  // A yes/no picker shows "true" before anything is chosen; store it, so what you see is what gets saved.
+  const boolUnset = type === 'boolean' && (op === 'equals' || op === 'not_equals') && !node.values?.length && !node.compare
+  useEffect(() => { if (boolUnset) set({ values: ['true'] }) })  // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className="cond-line">
       <ColumnSelect model={model} value={node.column} withVirtual
@@ -706,6 +709,8 @@ function TraitConditionEditor({ node, onChange }: { node: TraitNode; onChange: (
   const typeOf = (id: number | string) => schema.virtual_columns.find((v) => v.name === 'trait.' + id)?.type ?? 'string'
   const vtype: ColumnType = !isInline ? typeOf(node.trait_id!)
     : ['aggregation', 'count'].includes(node.inline?.method ?? 'count') ? 'number' : (node.inline?.result_type ?? 'string')
+  const boolUnset = vtype === 'boolean' && (node.operator === 'equals' || node.operator === 'not_equals') && !node.values?.length
+  useEffect(() => { if (boolUnset) onChange({ ...node, values: ['true'] }) })  // eslint-disable-line react-hooks/exhaustive-deps
   return (<>
     <div className="cond-line">
       <Select value={isInline ? 'custom' : String(node.trait_id)}
@@ -720,6 +725,10 @@ function TraitConditionEditor({ node, onChange }: { node: TraitNode; onChange: (
       </>)}
       {['equals', 'not_equals', 'contains', 'not_contains', 'starts_with', 'not_starts_with', 'ends_with', 'not_ends_with'].includes(node.operator) && vtype !== 'boolean' && (
         <ValuePicker modelId={0} column="" suggest={false} values={(node.values ?? []).map(String)} onChange={(v) => onChange({ ...node, values: v })} />
+      )}
+      {vtype === 'boolean' && (node.operator === 'equals' || node.operator === 'not_equals') && (
+        <Select value={String(node.values?.[0] ?? 'true')} options={[{ value: 'true', label: 'true' }, { value: 'false', label: 'false' }]}
+          onChange={(v) => onChange({ ...node, values: [v] })} />
       )}
     </div>
     {isInline && node.inline && (

@@ -311,6 +311,8 @@ export interface SyncRun {
   removed: number
   failed: number
   error: string | null
+  /** CSV file export syncs: whether this run wrote a file that can be downloaded */
+  file?: boolean
   details?: {
     errors?: { id: string; kind: string; error: string }[]; query?: string; traceback?: string
     requests?: { method: string; url: string; request: string; status: number | null; response: string }[]
@@ -496,11 +498,27 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return res.json() as Promise<T>
 }
 
+/** Fetch a file with the same identity headers as API calls and hand it to the browser as a download. */
+async function download(path: string, fallbackName: string): Promise<void> {
+  const res = await fetch(`/api${path}`, { headers: getPersona() ? { 'X-Dev-User': getPersona() } : {} })
+  if (!res.ok) {
+    let msg = `${res.status} ${res.statusText}`
+    try { const data = await res.json(); if (data.detail) msg = String(data.detail) } catch { /* not json */ }
+    throw new ApiError(msg)
+  }
+  const name = /filename="?([^";]+)"?/.exec(res.headers.get('Content-Disposition') ?? '')?.[1] ?? fallbackName
+  const url = URL.createObjectURL(await res.blob())
+  const a = Object.assign(document.createElement('a'), { href: url, download: name })
+  document.body.appendChild(a); a.click(); a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
 export const api = {
   get: <T>(path: string) => request<T>('GET', path),
   post: <T>(path: string, body: unknown = {}) => request<T>('POST', path, body),
   put: <T>(path: string, body: unknown) => request<T>('PUT', path, body),
   del: <T>(path: string) => request<T>('DELETE', path),
+  download,
 }
 
 export const fmt = {

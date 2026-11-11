@@ -1,4 +1,5 @@
 from .base import Destination
+from .brevo import Brevo
 from .csv_export import CsvExport
 from .gam import GoogleAdManager
 from .gam_kv import GamKeyValues
@@ -8,7 +9,7 @@ from .sailthru import Sailthru
 from .webhook import Webhook
 
 REGISTRY: dict[str, type[Destination]] = {
-    cls.type: cls for cls in (Sailthru, GoogleAdManager, GamKeyValues, Webhook, CsvExport, HubSpot, MetaCustomAudience)
+    cls.type: cls for cls in (Sailthru, Brevo, GoogleAdManager, GamKeyValues, Webhook, CsvExport, HubSpot, MetaCustomAudience)
 }
 
 

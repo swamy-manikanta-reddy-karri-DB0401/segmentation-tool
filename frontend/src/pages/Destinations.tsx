@@ -351,7 +351,7 @@ export default function Destinations() {
             : <Inspector empty={<div><strong>No destination selected</strong></div>} />} />
       ) : (
         <div className="card dx2-empty">
-          <div className="dx2-empty-logos" aria-hidden="true">{['sailthru', 'gam', 'meta_custom_audience', 'hubspot'].map((t) => <DestIcon key={t} type={t} size={46} />)}</div>
+          <div className="dx2-empty-logos" aria-hidden="true">{['sailthru', 'brevo', 'gam', 'meta_custom_audience', 'hubspot'].map((t) => <DestIcon key={t} type={t} size={46} />)}</div>
           <h2>Connect your first marketing tool</h2>
           <p className="muted">Sailthru, Google Ad Manager, Meta, HubSpot and more. You can add credentials now or later — syncs wait until they're in place.</p>
           {canAdd && <button className="btn primary" onClick={() => setModal({})} disabled={!types.data}>Add destination</button>}
