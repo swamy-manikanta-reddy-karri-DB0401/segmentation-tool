@@ -967,11 +967,37 @@ def run_sync(sync_id: int, body: dict = Body(default={})):
     return {"run_id": sync_engine.start_run(sync_id, "manual", bool(body.get("full_resync")))}
 
 
+def _export_file(sync_id: int, run_id: int) -> Path | None:
+    """The CSV a run wrote (CSV file export destination), if any — runs with no changes write no file."""
+    files = sorted(config.EXPORT_DIR.glob(f"*/sync{sync_id}_run{run_id}_*.csv"))
+    return files[-1] if files else None
+
+
 @app.get("/api/syncs/{sync_id}/runs")
 def sync_runs(sync_id: int):
     access.require_view(access.brand_of_sync(sync_id))
-    return db.query("SELECT id, sync_id, status, trigger, started_at, finished_at, audience_rows, added, changed, "
+    runs = db.query("SELECT id, sync_id, status, trigger, started_at, finished_at, audience_rows, added, changed, "
                     "removed, failed, error FROM sync_runs WHERE sync_id = ? ORDER BY id DESC LIMIT 50", (sync_id,))
+    dest = db.one("SELECT d.type FROM syncs s JOIN destinations d ON d.id = s.destination_id WHERE s.id = ?", (sync_id,))
+    if dest and dest["type"] == "csv":
+        for r in runs:
+            r["file"] = _export_file(sync_id, r["id"]) is not None
+    return runs
+
+
+@app.get("/api/runs/{run_id}/file")
+def run_file(run_id: int):
+    """Download the CSV a run wrote. It holds personal data, so only people who may run the sync can take it."""
+    run = _get("sync_runs", run_id)
+    sync = _get("syncs", run["sync_id"])
+    brand_id = access.brand_of_sync(sync["id"])
+    access.require("syncs.run", brand_id, sync["destination_id"])
+    file = _export_file(sync["id"], run_id)
+    if not file:
+        raise HTTPException(404, "This run has no file. Runs with no changes write nothing, and files are cleared when the app restarts.")
+    name = re.sub(r"[^A-Za-z0-9]+", "_", sync["name"]).strip("_") or "sync"
+    access.audit("download", "sync", sync["id"], brand_id, name=sync["name"], run_id=run_id)
+    return FileResponse(file, media_type="text/csv", filename=f"{name}_run{run_id}_{file.stem.rsplit('_', 2)[-2]}.csv")
 
 
 @app.get("/api/runs/recent")

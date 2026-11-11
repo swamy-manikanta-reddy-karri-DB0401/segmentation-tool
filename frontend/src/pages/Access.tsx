@@ -27,9 +27,9 @@ const PLATFORM_CAPS = ['Connect Databricks sources', 'Change the data model', 'M
 
 const ACTION_LABEL: Record<string, string> = {
   create: 'created', update: 'changed', delete: 'deleted', approve: 'approved', reject: 'sent back', run: 'ran',
-  pause: 'paused', resume: 'resumed', grant: 'granted', revoke: 'revoked', mute: 'muted', unmute: 'unmuted',
+  pause: 'paused', resume: 'resumed', grant: 'granted', revoke: 'revoked', mute: 'muted', unmute: 'unmuted', download: 'downloaded',
 }
-const ACTION_TONE: Record<string, string> = { approve: 'green', grant: 'green', resume: 'green', reject: 'red', delete: 'red', revoke: 'red', run: 'blue', pause: 'amber', mute: 'amber' }
+const ACTION_TONE: Record<string, string> = { approve: 'green', grant: 'green', resume: 'green', reject: 'red', delete: 'red', revoke: 'red', run: 'blue', download: 'blue', pause: 'amber', mute: 'amber' }
 
 const initials = (s: string) => s.split(/[@.\s_-]+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('') || '?'
 const objectName = (o: string) => o.replace(/_/g, ' ')
@@ -256,7 +256,8 @@ function PeopleTab({ openMatrix }: { openMatrix: () => void }) {
     <CollectionLayout
       list={
         <ListPane title="People & groups" count={principals.length}
-          actions={<button className="btn ghost sm" onClick={openMatrix}>Role guide</button>}
+          actions={<><button className="btn ghost sm" onClick={openMatrix}>Role guide</button>
+            <button className="btn primary sm" onClick={() => setGrant({})} disabled={!roles.data || !brands.data}>+ Grant role</button></>}
           toolbar={<>
             <SearchBox value={q} onChange={setQ} placeholder="Search names, emails, brands…" />
             <FilterChips label="Type" value={kind as 'all' | 'group' | 'user'} onChange={setKind} options={[
@@ -404,6 +405,7 @@ function sentence(r: AuditEntry): ReactNode {
   if (r.action === 'grant' || r.action === 'revoke') {
     return <><b>{r.actor}</b> {verb} <b>{String(d.role ?? '').replace(/_/g, ' ')}</b> {r.action === 'grant' ? 'to' : 'from'} <b>{String(d.principal ?? '')}</b></>
   }
+  if (r.action === 'download') return <><b>{r.actor}</b> downloaded the file of run #{String(d.run_id ?? '')} from <b>{name}</b></>
   return <><b>{r.actor}</b> {verb} the {objectName(r.object_type)} {name && <b>{name}</b>}</>
 }
 
@@ -429,7 +431,7 @@ function ActivityTab() {
   const [action, setAction] = useUrlState('action', 'all')
   const [kind, setKind] = useUrlState('object')
   const all = useMemo(() => [...(log.data ?? [])].sort((a, b) => b.at.localeCompare(a.at)), [log.data])
-  const groupOf = (a: string) => (['approve', 'reject'].includes(a) ? 'approvals' : ['grant', 'revoke'].includes(a) ? 'access' : ['run', 'pause', 'resume', 'mute', 'unmute'].includes(a) ? 'operations' : 'changes')
+  const groupOf = (a: string) => (['approve', 'reject'].includes(a) ? 'approvals' : ['grant', 'revoke'].includes(a) ? 'access' : ['run', 'download', 'pause', 'resume', 'mute', 'unmute'].includes(a) ? 'operations' : 'changes')
   const rows = all.filter((r) => (action === 'all' || groupOf(r.action) === action) && (!kind || r.object_type === kind)
     && matches(q, r.actor, r.object_type, JSON.stringify(r.details)))
   const paged = usePaged(rows, 30, `${q}|${action}|${kind}`, 'page')

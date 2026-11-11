@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, fmt } from '../api'
 import type { Sync, SyncRun } from '../api'
@@ -28,13 +28,40 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: str
   return <div className={`act-stat ${tone ?? ''}`}><span>{label}</span><strong>{value}</strong></div>
 }
 
-function RunDetail({ runId, onClose }: { runId: number; onClose: () => void }) {
+const fileName = (syncName: string, runId: number) => `${syncName.replace(/[^A-Za-z0-9]+/g, '_')}_run${runId}.csv`
+
+/** Download the CSV a run wrote; the file holds personal data, so only people who may run the sync get the button. */
+function DownloadFile({ run, syncName, canRun, sm = true }: { run: SyncRun; syncName: string; canRun: boolean; sm?: boolean }) {
+  const [busy, setBusy] = useState(false)
+  if (!run.file) return null
+  const go = async (e: ReactMouseEvent) => {
+    e.stopPropagation()
+    setBusy(true)
+    try {
+      await api.download(`/runs/${run.id}/file`, fileName(syncName, run.id))
+      toast('Download started')
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not download the file', 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <button className={`btn ${sm ? 'ghost sm' : ''}`} onClick={go} disabled={busy || !canRun}
+      title={canRun ? `Download the CSV of run #${run.id}` : 'Only people who can run this sync can download its files'}>
+      {busy ? 'Downloading…' : '↓ Download CSV'}
+    </button>
+  )
+}
+
+function RunDetail({ runId, onClose, file, syncName, canRun }: { runId: number; onClose: () => void; file?: boolean; syncName: string; canRun: boolean }) {
   const run = useAsync(() => api.get<SyncRun>(`/runs/${runId}`), [runId])
   const r = run.data
   return (
     <Modal title={`Run #${runId}`} subtitle={r ? `${TRIGGER[r.trigger] ?? cap(r.trigger)} run · started ${new Date(r.started_at).toLocaleString()}` : undefined} onClose={onClose} wide>
       {!r ? <Spinner /> : (<>
-        <div className="row" style={{ gap: 10 }}><StatusBadge status={r.status} /><span className="small muted">took {fmt.duration(r.started_at, r.finished_at)}</span></div>
+        <div className="row" style={{ gap: 10 }}><StatusBadge status={r.status} /><span className="small muted">took {fmt.duration(r.started_at, r.finished_at)}</span>
+          <span style={{ marginLeft: 'auto' }}><DownloadFile run={{ ...r, file }} syncName={syncName} canRun={canRun} sm={false} /></span></div>
         <div className="act-stats">
           <Stat label="In audience" value={fmt.num(r.audience_rows)} />
           <Stat label="Added" value={`+${fmt.num(r.added)}`} tone={r.added ? 'green' : ''} />
@@ -284,6 +311,7 @@ export default function ActivationDetail() {
   const health = syncHealth(s, last)
   const waiting = s.destination_configured === false
   const can = s.can ?? { edit: true, approve: true, run: true }
+  const isCsv = s.destination_type === 'csv'
   const approved = s.approval_status === 'approved'
   const runBlocked = running || waiting || !can.run || !approved
   const runTitle = !approved ? 'Waiting for approval by a Brand Marketing Admin' : !can.run ? "Your role can't run this sync" : waiting ? 'Add destination credentials first' : undefined
@@ -385,7 +413,9 @@ export default function ActivationDetail() {
       {approved && (s.alert_count ?? 0) > 0 && <SyncAlerts sync={s} canEdit={can.edit || can.approve} canMute={can.run || can.approve} />}
       <div className="card">
         <div className="card-head">
-          <div><h2>Run history</h2><div className="small muted">Every run, newest first — the table view of the chart above.</div></div>
+          <div><h2>Run history</h2><div className="small muted">{isCsv
+            ? 'Every run, newest first. Each run writes a CSV of what changed: the first run (or a full resync) has everyone, later runs only the people who joined, changed or left.'
+            : 'Every run, newest first — the table view of the chart above.'}</div></div>
           {(runs.data?.length ?? 0) > 0 && (
             <FilterChips label="Run status" value={runFilter} onChange={setRunFilter} options={[
               { value: 'all', label: 'All', count: runs.data!.length },
@@ -397,7 +427,7 @@ export default function ActivationDetail() {
         </div>
         {runs.data?.length ? (<>
           <table className="table">
-            <thead><tr><th>Run</th><th>Status</th><th>Started</th><th className="num">In audience</th><th className="num">Added</th><th className="num">Updated</th><th className="num">Removed</th><th className="num">Rejected</th><th>Duration</th></tr></thead>
+            <thead><tr><th>Run</th><th>Status</th><th>Started</th><th className="num">In audience</th><th className="num">Added</th><th className="num">Updated</th><th className="num">Removed</th><th className="num">Rejected</th><th>Duration</th>{isCsv && <th>File</th>}</tr></thead>
             <tbody>
               {paged.slice.map((r) => (
                 <tr key={r.id} className="clickable" onClick={() => setOpenRun(r.id)}>
@@ -410,6 +440,7 @@ export default function ActivationDetail() {
                   <td className="num">−{fmt.num(r.removed)}</td>
                   <td className="num" style={{ color: r.failed ? 'var(--red)' : undefined }}>{fmt.num(r.failed)}</td>
                   <td className="muted small">{fmt.duration(r.started_at, r.finished_at)}</td>
+                  {isCsv && <td>{r.file ? <DownloadFile run={r} syncName={s.name} canRun={can.run} /> : <span className="faint small" title="Runs with no changes write no file">No file</span>}</td>}
                 </tr>
               ))}
             </tbody>
@@ -433,7 +464,8 @@ export default function ActivationDetail() {
           ]} />
         </div>
       </div>
-      {openRun && <RunDetail runId={openRun} onClose={() => setOpenRun(null)} />}
+      {openRun && <RunDetail runId={openRun} onClose={() => setOpenRun(null)} syncName={s.name} canRun={can.run}
+        file={runs.data?.find((r) => r.id === openRun)?.file} />}
       {review && <ReviewModal sync={s} mode={review} onClose={() => setReview(null)} onDone={() => { setReview(null); sync.reload(); toast(review === 'approve' ? 'Sync approved and published' : 'Sent back to the builder') }} />}
     </div>
   )

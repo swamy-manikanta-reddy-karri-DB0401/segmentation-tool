@@ -3,7 +3,7 @@
  * Brand marks come from Simple Icons (CC0). Brands not in Simple Icons (Slack, Sailthru) and generic
  * channels (email, webhook, CSV) get a clean drawn glyph — never a letter tile.
  */
-import { siDatabricks, siGoogle, siHubspot, siMeta, siPagerduty } from 'simple-icons'
+import { siBrevo, siDatabricks, siGoogle, siHubspot, siMeta, siPagerduty } from 'simple-icons'
 
 type Mark = { path: string; color: string; viewBox?: string; stroke?: boolean }
 
@@ -26,6 +26,7 @@ const MARKS: Record<string, Mark> = {
   meta_custom_audience: brand(siMeta),
   meta: brand(siMeta),
   hubspot: brand(siHubspot),
+  brevo: brand(siBrevo),
   pagerduty: brand(siPagerduty),
   databricks: brand(siDatabricks),
   slack: { path: GLYPH.slack, color: '#611f69', stroke: true },
@@ -36,7 +37,7 @@ const MARKS: Record<string, Mark> = {
 }
 
 export const LOGO_LABEL: Record<string, string> = {
-  gam: 'Google Ad Manager (segments)', gam_kv: 'Google Ad Manager (key-values)', meta_custom_audience: 'Meta', hubspot: 'HubSpot', pagerduty: 'PagerDuty', slack: 'Slack',
+  gam: 'Google Ad Manager (segments)', gam_kv: 'Google Ad Manager (key-values)', meta_custom_audience: 'Meta', hubspot: 'HubSpot', brevo: 'Brevo', pagerduty: 'PagerDuty', slack: 'Slack',
   sailthru: 'Sailthru', email: 'Email', webhook: 'Webhook', csv: 'CSV', databricks: 'Databricks',
 }
 
